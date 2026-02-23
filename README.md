@@ -21,7 +21,7 @@ rule-based control loop to adjust concurrency.
 - Daemon mode (local API)
 - `calibrate` mode for concurrency/thermal/VRAM baseline sweeps
 - No npm/pip packages
-- No simulation mode
+- `simulate` mode for deterministic offline replay/what-if policy runs
 - No RL
 - No multi-GPU or multi-OS support
 
@@ -43,6 +43,10 @@ guardian calibrate --cmd "python generate_xtts.py"
 
 ```bash
 guardian report --control-log guardian.log --telemetry-log telemetry.log --throughput-floor-ratio 0.7 --output report.json
+```
+
+```bash
+guardian simulate --telemetry-log telemetry.log --control-log guardian.log --initial-baseline-throughput 120 --max-concurrency 8 --output simulate.json
 ```
 
 All flags:
@@ -79,6 +83,7 @@ All flags:
 - `--profile-path` (shared profile persistence path, default `.guardian-profiles.json`)
 - `--workload-type` (profile namespace key for `control` resume and `calibrate` persistence)
 - `--control-log`, `--telemetry-log`, `--throughput-floor-ratio`, `--output` (report mode)
+- `--telemetry-log`, `--control-log`, `--initial-baseline-throughput`, `--event-log`, `--output` (simulate mode)
 
 ### JSON config
 

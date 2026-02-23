@@ -150,9 +150,13 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
    - [x] Added integration test:
      - `cmd/guardian/main_test.go` (`TestReportCommand`)
 
-4. **[ ] FR-23 + FR-24 (Replay and what-if mode)**
+4. **[x] FR-23 + FR-24 (Replay and what-if mode)**
    - Add offline replay mode using recorded telemetry.
    - Add deterministic policy what-if runs without GPU hardware.
+   - Implemented as `guardian simulate` command.
+   - Added `internal/simulation` replay engine with telemetry/control replay ingestion and deterministic policy replay.
+   - Added unit tests in `internal/simulation/replay_test.go`.
+   - Added integration test for CLI in `cmd/guardian/main_test.go` (`TestSimulateCommand`).
 
 ## P3 — Runtime usability and CLI command parity
 

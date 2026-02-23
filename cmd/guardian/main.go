@@ -20,6 +20,7 @@ import (
 	"github.com/elhamdev/gpu-guardian/internal/engine"
 	"github.com/elhamdev/gpu-guardian/internal/logger"
 	"github.com/elhamdev/gpu-guardian/internal/report"
+	"github.com/elhamdev/gpu-guardian/internal/simulation"
 	"github.com/elhamdev/gpu-guardian/internal/telemetry"
 	"github.com/elhamdev/gpu-guardian/internal/throughput"
 )
@@ -304,6 +305,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "report failed: %v\n", err)
 			os.Exit(1)
 		}
+	case "simulate":
+		if err := runSimulate(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "simulate failed: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		printUsage()
 		os.Exit(1)
@@ -316,6 +322,7 @@ func printUsage() {
 	fmt.Println("  control --cmd \"<command>\" [flags]")
 	fmt.Println("  calibrate --cmd \"<command>\" [flags]")
 	fmt.Println("  report [flags]")
+	fmt.Println("  simulate --telemetry-log <path> [flags]")
 }
 
 func runDaemon(args []string) error {
@@ -663,6 +670,101 @@ func runReport(args []string) error {
 		return nil
 	}
 
+	fmt.Println(string(payload))
+	return nil
+}
+
+func runSimulate(args []string) error {
+	fs := flag.NewFlagSet("simulate", flag.ContinueOnError)
+	telemetryLog := fs.String("telemetry-log", "", "Recorded telemetry JSONL log")
+	controlLog := fs.String("control-log", "", "Recorded control JSONL log (optional throughput source)")
+	minConc := fs.Int("min-concurrency", 1, "Minimum replay concurrency")
+	maxConc := fs.Int("max-concurrency", 4, "Maximum replay concurrency")
+	startConc := fs.Int("start-concurrency", 1, "Initial replay concurrency")
+	floor := fs.Float64("throughput-floor-ratio", 0.7, "Throughput floor ratio for policy replay")
+	floorSlowdown := fs.Float64("throughput-slowdown-floor-ratio", 0.5, "Throughput slowdown floor ratio")
+	temp := fs.Float64("soft-temp", 78, "Soft temperature threshold in °C")
+	hardTemp := fs.Float64("hard-temp", 84, "Hard temperature threshold in °C")
+	tempHysteresis := fs.Float64("temp-hysteresis-c", 2, "Temperature debounce before scale-up")
+	tpRecovery := fs.Float64("throughput-recovery-margin", 0.05, "Throughput recovery margin before scale-up")
+	tpRecoveryAttempts := fs.Int("throughput-recovery-max-attempts", 3, "Max recovery attempts before pause")
+	tpRecoveryMultiplier := fs.Int("throughput-recovery-step-multiplier", 2, "Multiplier for aggressive recovery step")
+	memLimit := fs.Float64("memory-pressure-limit", 0.9, "Memory pressure limit above which to reduce load")
+	riskLimit := fs.Float64("throttle-risk-limit", 0.85, "Throttle risk limit above which to reduce load")
+	cooldown := fs.Int("adjustment-cooldown-sec", 10, "Action cooldown in seconds")
+	blWindow := fs.Int("baseline-window-sec", 120, "Baseline estimation warmup window in seconds")
+	tpWindow := fs.Int("throughput-window-sec", 30, "Throughput averaging window in seconds")
+	tpFloorWindow := fs.Int("throughput-floor-window-sec", 30, "Required floor-duration window in seconds")
+	maxStep := fs.Int("max-concurrency-step", 1, "Maximum concurrency delta per action")
+	initialBaseline := fs.Float64("initial-baseline-throughput", 0, "Baseline throughput for what-if replay")
+	poll := fs.Int("poll-interval-sec", 2, "Sampling fallback interval when timestamps are missing")
+	outputPath := fs.String("output", "", "Write simulation summary JSON to this path")
+	eventLog := fs.String("event-log", "", "Write replay tick events to this path")
+	maxTicks := fs.Int("max-ticks", 0, "Limit replay to this many ticks (0 means no limit)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*telemetryLog) == "" {
+		return fmt.Errorf("telemetry log is required")
+	}
+	if *minConc <= 0 {
+		*minConc = 1
+	}
+	if *maxConc < *minConc {
+		*maxConc = *minConc
+	}
+	if *startConc < *minConc {
+		*startConc = *minConc
+	}
+	if *startConc > *maxConc {
+		*startConc = *maxConc
+	}
+
+	ctrlCfg := control.RuleConfig{
+		SoftTemp:                         *temp,
+		HardTemp:                         *hardTemp,
+		ThroughputFloorRatio:             *floor,
+		ThroughputSlowdownFloorRatio:     *floorSlowdown,
+		ThroughputWindowSec:              *tpWindow,
+		ThroughputFloorSec:               *tpFloorWindow,
+		ThroughputRecoveryMaxAttempts:    *tpRecoveryAttempts,
+		ThroughputRecoveryStepMultiplier: *tpRecoveryMultiplier,
+		TempHysteresisC:                  *tempHysteresis,
+		ThroughputRecoveryMargin:         *tpRecovery,
+		MemoryPressureLimit:              *memLimit,
+		ThrottleRiskLimit:                *riskLimit,
+		MaxConcurrencyStep:               *maxStep,
+	}
+
+	res, err := simulation.Replay(simulation.ReplayConfig{
+		TelemetryLogPath:           *telemetryLog,
+		ControlLogPath:             *controlLog,
+		MinConcurrency:             *minConc,
+		MaxConcurrency:             *maxConc,
+		StartConcurrency:           *startConc,
+		MaxConcurrencyStep:         *maxStep,
+		InitialBaselineThroughput:  *initialBaseline,
+		RuleCfg:                    ctrlCfg,
+		AdjustmentCooldown:        time.Duration(*cooldown) * time.Second,
+		ThroughputWindow:          time.Duration(*tpWindow) * time.Second,
+		BaselineWindow:            time.Duration(*blWindow) * time.Second,
+		PollInterval:              time.Duration(*poll) * time.Second,
+		EventLogPath:              *eventLog,
+		MaxTicks:                  *maxTicks,
+	})
+	if err != nil {
+		return fmt.Errorf("replay run failed: %w", err)
+	}
+
+	payload, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize simulation result: %w", err)
+	}
+
+	if strings.TrimSpace(*outputPath) != "" {
+		return os.WriteFile(*outputPath, payload, 0o600)
+	}
 	fmt.Println(string(payload))
 	return nil
 }

@@ -309,6 +309,90 @@ func TestReportCommand(t *testing.T) {
 	}
 }
 
+func TestSimulateCommand(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	telemetryLog := filepath.Join(tmpDir, "telemetry.log")
+	controlLog := filepath.Join(tmpDir, "control.log")
+	outputPath := filepath.Join(tmpDir, "simulate.json")
+	eventPath := filepath.Join(tmpDir, "events.log")
+
+	telemetryLines := []string{
+		`{"timestamp":"2026-01-01T00:00:00Z","temp_c":62,"temp_valid":true}`,
+		`{"timestamp":"2026-01-01T00:00:01Z","temp_c":63,"temp_valid":true}`,
+		`{"timestamp":"2026-01-01T00:00:02Z","temp_c":64,"temp_valid":true}`,
+		`{"timestamp":"2026-01-01T00:00:03Z","temp_c":65,"temp_valid":true}`,
+	}
+	controlLines := []string{
+		`{"timestamp":"2026-01-01T00:00:00Z","throughput_ratio":1.0,"baseline_bps":120}`,
+		`{"timestamp":"2026-01-01T00:00:01Z","throughput_ratio":1.0,"baseline_bps":120}`,
+		`{"timestamp":"2026-01-01T00:00:02Z","throughput_ratio":1.0,"baseline_bps":120}`,
+		`{"timestamp":"2026-01-01T00:00:03Z","throughput_ratio":1.0,"baseline_bps":120}`,
+	}
+	writeFixtureLines(t, telemetryLog, telemetryLines)
+	writeFixtureLines(t, controlLog, controlLines)
+
+	cmd := execCommand(
+		ctx,
+		"go",
+		"run",
+		".",
+		"simulate",
+		"--telemetry-log", telemetryLog,
+		"--control-log", controlLog,
+		"--start-concurrency", "1",
+		"--min-concurrency", "1",
+		"--max-concurrency", "3",
+		"--initial-baseline-throughput", "120",
+		"--throughput-recovery-max-attempts", "2",
+		"--poll-interval-sec", "1",
+		"--adjustment-cooldown-sec", "0",
+		"--throughput-floor-ratio", "0.01",
+		"--output", outputPath,
+		"--event-log", eventPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("simulate command failed: %v; out=%s", err, string(out))
+	}
+
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("expected simulation output at %s: %v", outputPath, err)
+	}
+	var got struct {
+		DecisionSamples   int    `json:"decision_samples"`
+		FinalConcurrency  int    `json:"final_concurrency"`
+		FinalAction       string `json:"final_action"`
+		TelemetrySamples  int    `json:"telemetry_samples"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode simulate output: %v", err)
+	}
+	if got.TelemetrySamples != 4 {
+		t.Fatalf("expected 4 telemetry samples, got %d", got.TelemetrySamples)
+	}
+	if got.DecisionSamples != 4 {
+		t.Fatalf("expected 4 decisions, got %d", got.DecisionSamples)
+	}
+	if got.FinalConcurrency != 2 {
+		t.Fatalf("expected final concurrency 2, got %d", got.FinalConcurrency)
+	}
+	if got.FinalAction != "increase" {
+		t.Fatalf("expected final action increase, got %q", got.FinalAction)
+	}
+
+	eventRaw, err := os.ReadFile(eventPath)
+	if err != nil {
+		t.Fatalf("expected event log at %s: %v", eventPath, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(eventRaw)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 event lines, got %d", len(lines))
+	}
+}
+
 func writeFixtureLines(t *testing.T, path string, lines []string) {
 	t.Helper()
 	payload := strings.Join(lines, "\n") + "\n"
