@@ -155,14 +155,19 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
    - Add deterministic policy what-if runs without GPU hardware.
    - Implemented as `guardian simulate` command.
    - Added `internal/simulation` replay engine with telemetry/control replay ingestion and deterministic policy replay.
-   - Added unit tests in `internal/simulation/replay_test.go`.
-   - Added integration test for CLI in `cmd/guardian/main_test.go` (`TestSimulateCommand`).
+ - Added unit tests in `internal/simulation/replay_test.go`.
+ - Added integration test for CLI in `cmd/guardian/main_test.go` (`TestSimulateCommand`).
 
 ## P3 — Runtime usability and CLI command parity
 
-1. **[ ] CLI-2 (`observe` / `control` / `calibrate` / `simulate` / `report`)**
+1. **[x] CLI-2 (`observe` / `control` / `calibrate` / `simulate` / `report`)**
    - Expand CLI commands and argument schemas to match SRS intent.
    - Ensure output format is consistent for human + machine consumption.
+   - Added `observe` command with both single-session and full-session inspection modes.
+   - `observe` defaults to fetching `/v1/sessions/default`, and supports `--all` to list all sessions.
+   - Added unit/integration coverage in `cmd/guardian/main_test.go`:
+     - `TestObserveCommandReadsSessionJSON`
+     - `TestObserveCommandFailsWithoutDaemon`
 
 2. **[ ] DR-2/4 + CLI consistency (session and telemetry status contract)**
    - Return aligned field names across CLI and API responses (state, policy version, last action, confidence).

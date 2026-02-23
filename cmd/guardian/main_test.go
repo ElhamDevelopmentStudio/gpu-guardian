@@ -5,12 +5,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/elhamdev/gpu-guardian/internal/daemon"
 )
 
 func TestControlLoopE2EWithMaxTicks(t *testing.T) {
@@ -362,10 +366,10 @@ func TestSimulateCommand(t *testing.T) {
 		t.Fatalf("expected simulation output at %s: %v", outputPath, err)
 	}
 	var got struct {
-		DecisionSamples   int    `json:"decision_samples"`
-		FinalConcurrency  int    `json:"final_concurrency"`
-		FinalAction       string `json:"final_action"`
-		TelemetrySamples  int    `json:"telemetry_samples"`
+		DecisionSamples  int    `json:"decision_samples"`
+		FinalConcurrency int    `json:"final_concurrency"`
+		FinalAction      string `json:"final_action"`
+		TelemetrySamples int    `json:"telemetry_samples"`
 	}
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decode simulate output: %v", err)
@@ -390,6 +394,63 @@ func TestSimulateCommand(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(eventRaw)), "\n")
 	if len(lines) != 4 {
 		t.Fatalf("expected 4 event lines, got %d", len(lines))
+	}
+}
+
+func TestObserveCommandReadsSessionJSON(t *testing.T) {
+	orig := daemonBaseURL
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/health":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok","version":"v1"}`))
+		case "/v1/sessions/default":
+			w.WriteHeader(http.StatusOK)
+			payload, _ := json.Marshal(daemon.SessionState{
+				ID:      "default",
+				Running: true,
+				Mode:    "stateful",
+				Goal:    "run",
+			})
+			_, _ = w.Write(payload)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+	daemonBaseURL = ts.URL
+	defer func() { daemonBaseURL = orig }()
+
+	tmpDir := t.TempDir()
+	out := filepath.Join(tmpDir, "observe.json")
+	if err := runObserve([]string{"--session-id", "default", "--output", out}); err != nil {
+		t.Fatalf("observe command failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("expected observe output at %s: %v", out, err)
+	}
+	var got daemon.SessionState
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode observe output: %v", err)
+	}
+	if got.ID != "default" {
+		t.Fatalf("expected session id default, got %q", got.ID)
+	}
+	if !got.Running {
+		t.Fatalf("expected observed session running")
+	}
+}
+
+func TestObserveCommandFailsWithoutDaemon(t *testing.T) {
+	orig := daemonBaseURL
+	daemonBaseURL = "http://127.0.0.1:0"
+	defer func() { daemonBaseURL = orig }()
+
+	err := runObserve([]string{"--session-id", "default"})
+	if err == nil {
+		t.Fatalf("expected observe command to fail without daemon")
 	}
 }
 

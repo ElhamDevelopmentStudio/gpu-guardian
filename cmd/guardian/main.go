@@ -310,6 +310,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "simulate failed: %v\n", err)
 			os.Exit(1)
 		}
+	case "observe":
+		if err := runObserve(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "observe failed: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		printUsage()
 		os.Exit(1)
@@ -323,6 +328,7 @@ func printUsage() {
 	fmt.Println("  calibrate --cmd \"<command>\" [flags]")
 	fmt.Println("  report [flags]")
 	fmt.Println("  simulate --telemetry-log <path> [flags]")
+	fmt.Println("  observe [--session-id <id>|--all] [flags]")
 }
 
 func runDaemon(args []string) error {
@@ -738,14 +744,14 @@ func runSimulate(args []string) error {
 	}
 
 	res, err := simulation.Replay(simulation.ReplayConfig{
-		TelemetryLogPath:           *telemetryLog,
-		ControlLogPath:             *controlLog,
-		MinConcurrency:             *minConc,
-		MaxConcurrency:             *maxConc,
-		StartConcurrency:           *startConc,
-		MaxConcurrencyStep:         *maxStep,
-		InitialBaselineThroughput:  *initialBaseline,
-		RuleCfg:                    ctrlCfg,
+		TelemetryLogPath:          *telemetryLog,
+		ControlLogPath:            *controlLog,
+		MinConcurrency:            *minConc,
+		MaxConcurrency:            *maxConc,
+		StartConcurrency:          *startConc,
+		MaxConcurrencyStep:        *maxStep,
+		InitialBaselineThroughput: *initialBaseline,
+		RuleCfg:                   ctrlCfg,
 		AdjustmentCooldown:        time.Duration(*cooldown) * time.Second,
 		ThroughputWindow:          time.Duration(*tpWindow) * time.Second,
 		BaselineWindow:            time.Duration(*blWindow) * time.Second,
@@ -762,6 +768,83 @@ func runSimulate(args []string) error {
 		return fmt.Errorf("serialize simulation result: %w", err)
 	}
 
+	if strings.TrimSpace(*outputPath) != "" {
+		return os.WriteFile(*outputPath, payload, 0o600)
+	}
+	fmt.Println(string(payload))
+	return nil
+}
+
+func runObserve(args []string) error {
+	fs := flag.NewFlagSet("observe", flag.ContinueOnError)
+	sessionID := fs.String("session-id", "default", "Session ID to fetch (default)")
+	allSessions := fs.Bool("all", false, "List all sessions instead of a single session")
+	outputPath := fs.String("output", "", "Write observe output JSON to this path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if _, err := fetchDaemonHealth(); err != nil {
+		return fmt.Errorf("daemon unavailable for observe: %w", err)
+	}
+
+	client := &http.Client{Timeout: 300 * time.Millisecond}
+	if *allSessions {
+		req, err := http.NewRequest(http.MethodGet, daemonBaseURL+"/v1/sessions", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			return fmt.Errorf("observe sessions failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var sessions []daemon.SessionState
+		if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
+			_ = resp.Body.Close()
+			return fmt.Errorf("decode sessions: %w", err)
+		}
+		_ = resp.Body.Close()
+
+		payload, err := json.MarshalIndent(sessions, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode observe output: %w", err)
+		}
+		if strings.TrimSpace(*outputPath) != "" {
+			return os.WriteFile(*outputPath, payload, 0o600)
+		}
+		fmt.Println(string(payload))
+		return nil
+	}
+
+	req, err := http.NewRequest(http.MethodGet, daemonBaseURL+"/v1/sessions/"+*sessionID, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return fmt.Errorf("observe session failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var sess daemon.SessionState
+	if err := json.NewDecoder(resp.Body).Decode(&sess); err != nil {
+		_ = resp.Body.Close()
+		return fmt.Errorf("decode session: %w", err)
+	}
+	_ = resp.Body.Close()
+
+	payload, err := json.MarshalIndent(sess, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode observe output: %w", err)
+	}
 	if strings.TrimSpace(*outputPath) != "" {
 		return os.WriteFile(*outputPath, payload, 0o600)
 	}

@@ -49,6 +49,10 @@ guardian report --control-log guardian.log --telemetry-log telemetry.log --throu
 guardian simulate --telemetry-log telemetry.log --control-log guardian.log --initial-baseline-throughput 120 --max-concurrency 8 --output simulate.json
 ```
 
+```bash
+guardian observe --session-id default
+```
+
 All flags:
 
 - `--cmd` command to run
@@ -84,6 +88,7 @@ All flags:
 - `--workload-type` (profile namespace key for `control` resume and `calibrate` persistence)
 - `--control-log`, `--telemetry-log`, `--throughput-floor-ratio`, `--output` (report mode)
 - `--telemetry-log`, `--control-log`, `--initial-baseline-throughput`, `--event-log`, `--output` (simulate mode)
+- `--session-id`, `--all`, `--output` (observe mode)
 
 ### JSON config
 
