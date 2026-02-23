@@ -92,9 +92,24 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
     - `go test ./... -tags=e2e`
     - `go test ./... -tags=regression`
 
-4. **[ ] FR-2 (Persisted calibration/session profile integration)**
-   - Move startup and checkpoint defaults to profile-backed initialization.
-   - Ensure behavior is deterministic across restarts.
+4. **[x] FR-2 (Persisted calibration/session profile integration)**
+  - ✅ Implemented stateful checkpoint-backed startup defaults in daemon session startup:
+    - Added `StartRequest.InitialBaselineThroughput` and checkpoint restore path in `internal/daemon/daemon.go`.
+    - Added checkpoint ingestion helper:
+      - `applyStatefulCheckpointDefaults(...)` reads `SessionState` from `checkpoint_path`.
+      - Restores start concurrency (clamped to min/max) from checkpointed `state.current_concurrency`.
+      - Restores baseline throughput from checkpointed `state.baseline_throughput`.
+    - Threaded restored baseline into engine through `StartRequestToEngineConfig(...)` and `internal/engine.Config.InitialBaselineThroughput`.
+    - Added `throughput.Tracker.RestoreBaseline(...)` and used in engine startup so restored sessions begin with deterministic baseline.
+  - Added tests:
+    - `internal/daemon/daemon_test.go` (`TestStatefulSessionAppliesCheckpointDefaults`)
+    - `internal/engine/engine_test.go` (`TestEngineRestoresInitialBaseline`)
+    - `internal/throughput/throughput_test.go` (`TestTrackerRestoreBaseline`)
+  - Verified behavior via full test matrix:
+    - `go test ./...`
+    - `go test ./... -tags=integration`
+    - `go test ./... -tags=e2e`
+    - `go test ./... -tags=regression`
 
 ## P2 — Calibration, reporting, simulation, and traceability
 

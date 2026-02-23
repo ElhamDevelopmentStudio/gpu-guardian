@@ -49,3 +49,15 @@ func TestTrackerWindowAveragesSamples(t *testing.T) {
 		t.Fatalf("expected average over window, got %f", avg)
 	}
 }
+
+func TestTrackerRestoreBaseline(t *testing.T) {
+	tr := NewTracker(3*time.Second, 120*time.Second)
+	tr.RestoreBaseline(42.5)
+
+	if !tr.IsBaselineReady() {
+		t.Fatalf("expected baseline to be ready after restore")
+	}
+	if got := tr.Baseline(); got != 42.5 {
+		t.Fatalf("expected restored baseline %f, got %f", 42.5, got)
+	}
+}

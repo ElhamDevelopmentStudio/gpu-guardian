@@ -245,6 +245,42 @@ func TestEnginePersistsTelemetrySamples(t *testing.T) {
 	}
 }
 
+func TestEngineRestoresInitialBaseline(t *testing.T) {
+	adapter := &fakeAdapter{}
+	ctrl := &scriptedController{
+		actions: []control.Action{
+			{Type: control.ActionHold},
+		},
+	}
+
+	e := New(
+		Config{
+			Command:                   "python generate_xtts.py",
+			MinConcurrency:            1,
+			MaxConcurrency:            2,
+			StartConcurrency:          1,
+			AdjustmentCooldown:        0,
+			PollInterval:              10 * time.Millisecond,
+			MaxConcurrencyStep:        1,
+			MaxTicks:                  2,
+			InitialBaselineThroughput: 55,
+		},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	result, err := e.Start(context.Background())
+	if err != nil {
+		t.Fatalf("engine start failed: %v", err)
+	}
+	if result.State.BaselineThroughput != 55 {
+		t.Fatalf("expected initial baseline restore to 55, got %f", result.State.BaselineThroughput)
+	}
+}
+
 func TestEngineReportsStateEstimate(t *testing.T) {
 	adapter := &fakeAdapter{}
 	ctrl := &scriptedController{

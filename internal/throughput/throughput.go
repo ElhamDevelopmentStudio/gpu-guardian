@@ -85,6 +85,14 @@ func (t *Tracker) Baseline() float64 {
 	return t.baseline
 }
 
+// RestoreBaseline seeds baseline estimation when continuing from a checkpoint/profile.
+func (t *Tracker) RestoreBaseline(throughput float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.baseline = throughput
+	t.baselineReady = throughput > 0
+}
+
 func (t *Tracker) IsBaselineReady() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()

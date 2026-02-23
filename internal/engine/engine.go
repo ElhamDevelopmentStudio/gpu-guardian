@@ -46,22 +46,23 @@ type WorkloadAdapter interface {
 
 // Config contains canonical engine bootstrap parameters.
 type Config struct {
-	APIVersion            string        `json:"api_version"`
-	Command               string        `json:"command"`
-	PollInterval          time.Duration `json:"poll_interval"`
-	SoftTemp              float64       `json:"soft_temp"`
-	HardTemp              float64       `json:"hard_temp"`
-	MinConcurrency        int           `json:"min_concurrency"`
-	MaxConcurrency        int           `json:"max_concurrency"`
-	StartConcurrency      int           `json:"start_concurrency"`
-	ThroughputFloorRatio  float64       `json:"throughput_floor_ratio"`
-	AdjustmentCooldown    time.Duration `json:"adjustment_cooldown"`
-	ThroughputWindow      time.Duration `json:"throughput_window"`
-	ThroughputFloorWindow time.Duration `json:"throughput_floor_window"`
-	BaselineWindow        time.Duration `json:"baseline_window"`
-	MaxConcurrencyStep    int           `json:"max_concurrency_step"`
-	MaxTicks              int           `json:"max_ticks"`
-	TelemetryLogPath      string        `json:"telemetry_log_path"`
+	APIVersion                string        `json:"api_version"`
+	Command                   string        `json:"command"`
+	PollInterval              time.Duration `json:"poll_interval"`
+	SoftTemp                  float64       `json:"soft_temp"`
+	HardTemp                  float64       `json:"hard_temp"`
+	MinConcurrency            int           `json:"min_concurrency"`
+	MaxConcurrency            int           `json:"max_concurrency"`
+	StartConcurrency          int           `json:"start_concurrency"`
+	ThroughputFloorRatio      float64       `json:"throughput_floor_ratio"`
+	AdjustmentCooldown        time.Duration `json:"adjustment_cooldown"`
+	ThroughputWindow          time.Duration `json:"throughput_window"`
+	ThroughputFloorWindow     time.Duration `json:"throughput_floor_window"`
+	BaselineWindow            time.Duration `json:"baseline_window"`
+	MaxConcurrencyStep        int           `json:"max_concurrency_step"`
+	MaxTicks                  int           `json:"max_ticks"`
+	TelemetryLogPath          string        `json:"telemetry_log_path"`
+	InitialBaselineThroughput float64       `json:"initial_baseline_throughput"`
 }
 
 // RunState exposes the latest engine decision context and runtime snapshot.
@@ -316,6 +317,10 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 	})
 
 	state := RunState{CurrentConcurrency: e.cfg.StartConcurrency}
+	if e.cfg.InitialBaselineThroughput > 0 {
+		e.throughputTracker.RestoreBaseline(e.cfg.InitialBaselineThroughput)
+		state.BaselineThroughput = e.cfg.InitialBaselineThroughput
+	}
 	state.ProcessPID = 0
 
 	if err := e.adapter.Start(ctx, e.cfg.Command, state.CurrentConcurrency); err != nil {

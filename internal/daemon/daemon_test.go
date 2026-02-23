@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/elhamdev/gpu-guardian/internal/engine"
 )
 
 func TestHealthEndpoint(t *testing.T) {
@@ -201,6 +204,41 @@ func TestSessionRecoveryPausesOnRepeatedFailure(t *testing.T) {
 	}
 	if len(onDisk.Errors) == 0 {
 		t.Fatalf("expected checkpoint to include errors")
+	}
+}
+
+func TestStatefulSessionAppliesCheckpointDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	checkpointPath := filepath.Join(tmpDir, "session-checkpoint.json")
+	profile := SessionState{
+		ID:   "default",
+		Mode: string(SessionModeStateful),
+		State: engine.RunState{
+			CurrentConcurrency: 4,
+			BaselineThroughput: 55.5,
+		},
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatalf("failed to marshal checkpoint state: %v", err)
+	}
+	if err := os.WriteFile(checkpointPath, raw, 0o600); err != nil {
+		t.Fatalf("failed to write checkpoint state: %v", err)
+	}
+
+	req := &StartRequest{
+		Mode:             string(SessionModeStateful),
+		CheckpointPath:   checkpointPath,
+		MinConcurrency:   1,
+		MaxConcurrency:   8,
+		StartConcurrency: 1,
+	}
+	applyStatefulCheckpointDefaults(req)
+	if req.StartConcurrency != 4 {
+		t.Fatalf("expected checkpoint start concurrency to be 4, got %d", req.StartConcurrency)
+	}
+	if req.InitialBaselineThroughput != 55.5 {
+		t.Fatalf("expected checkpoint baseline restore to 55.5, got %f", req.InitialBaselineThroughput)
 	}
 }
 

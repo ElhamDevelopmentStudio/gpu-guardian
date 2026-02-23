@@ -70,6 +70,7 @@ type StartRequest struct {
 	LogMaxSizeMB                     int     `json:"log_max_size_mb"`
 	WorkloadLogPath                  string  `json:"workload_log_path"`
 	EchoWorkloadOutput               bool    `json:"echo_workload_output"`
+	InitialBaselineThroughput        float64 `json:"initial_baseline_throughput"`
 	MaxTicks                         int     `json:"max_ticks"`
 	Mode                             string  `json:"mode"`
 	CheckpointPath                   string  `json:"checkpoint_path"`
@@ -376,6 +377,7 @@ func (s *Server) sessionSnapshot(id string, sess *sessionState) SessionState {
 
 func (s *Server) startSession(ctx context.Context, req StartRequest) (string, error) {
 	normalizeStartRequest(&req)
+	applyStatefulCheckpointDefaults(&req)
 	if strings.TrimSpace(req.Command) == "" {
 		return "", errors.New("command is required")
 	}
@@ -541,21 +543,22 @@ func (s *Server) stopSession(id string) error {
 
 func StartRequestToEngineConfig(req StartRequest) engine.Config {
 	return engine.Config{
-		Command:               req.Command,
-		PollInterval:          time.Duration(req.PollIntervalSec) * time.Second,
-		SoftTemp:              req.SoftTemp,
-		HardTemp:              req.HardTemp,
-		MinConcurrency:        req.MinConcurrency,
-		MaxConcurrency:        req.MaxConcurrency,
-		StartConcurrency:      req.StartConcurrency,
-		ThroughputFloorRatio:  req.ThroughputFloorRatio,
-		AdjustmentCooldown:    time.Duration(req.AdjustmentCooldownSec) * time.Second,
-		ThroughputWindow:      time.Duration(req.ThroughputWindowSec) * time.Second,
-		ThroughputFloorWindow: time.Duration(req.ThroughputFloorWindowSec) * time.Second,
-		BaselineWindow:        time.Duration(req.BaselineWindowSec) * time.Second,
-		MaxConcurrencyStep:    req.MaxConcurrencyStep,
-		TelemetryLogPath:      req.TelemetryLogPath,
-		MaxTicks:              req.MaxTicks,
+		Command:                   req.Command,
+		PollInterval:              time.Duration(req.PollIntervalSec) * time.Second,
+		SoftTemp:                  req.SoftTemp,
+		HardTemp:                  req.HardTemp,
+		MinConcurrency:            req.MinConcurrency,
+		MaxConcurrency:            req.MaxConcurrency,
+		StartConcurrency:          req.StartConcurrency,
+		ThroughputFloorRatio:      req.ThroughputFloorRatio,
+		AdjustmentCooldown:        time.Duration(req.AdjustmentCooldownSec) * time.Second,
+		ThroughputWindow:          time.Duration(req.ThroughputWindowSec) * time.Second,
+		ThroughputFloorWindow:     time.Duration(req.ThroughputFloorWindowSec) * time.Second,
+		BaselineWindow:            time.Duration(req.BaselineWindowSec) * time.Second,
+		MaxConcurrencyStep:        req.MaxConcurrencyStep,
+		TelemetryLogPath:          req.TelemetryLogPath,
+		MaxTicks:                  req.MaxTicks,
+		InitialBaselineThroughput: req.InitialBaselineThroughput,
 	}
 }
 
@@ -648,6 +651,47 @@ func normalizeStartRequest(req *StartRequest) {
 	if req.RecoveryCooldownSec <= 0 {
 		req.RecoveryCooldownSec = defaultRecoveryCooldownSec
 	}
+}
+
+func applyStatefulCheckpointDefaults(req *StartRequest) {
+	if req == nil || strings.TrimSpace(req.Mode) != string(SessionModeStateful) {
+		return
+	}
+	if strings.TrimSpace(req.CheckpointPath) == "" {
+		return
+	}
+	profile, err := readSessionCheckpoint(req.CheckpointPath)
+	if err != nil {
+		return
+	}
+	if profile.State.CurrentConcurrency > 0 {
+		req.StartConcurrency = clampInt(profile.State.CurrentConcurrency, req.MinConcurrency, req.MaxConcurrency)
+	}
+	if profile.State.BaselineThroughput > 0 {
+		req.InitialBaselineThroughput = profile.State.BaselineThroughput
+	}
+}
+
+func readSessionCheckpoint(path string) (SessionState, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return SessionState{}, err
+	}
+	var snapshot SessionState
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return SessionState{}, err
+	}
+	return snapshot, nil
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func (s *Server) ensureModeDefaults(req *StartRequest, sess *sessionState) {
