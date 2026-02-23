@@ -13,6 +13,7 @@ import (
 
 	"github.com/elhamdev/gpu-guardian/internal/adapter"
 	"github.com/elhamdev/gpu-guardian/internal/control"
+	"github.com/elhamdev/gpu-guardian/internal/engine"
 	"github.com/elhamdev/gpu-guardian/internal/logger"
 	"github.com/elhamdev/gpu-guardian/internal/telemetry"
 	"github.com/elhamdev/gpu-guardian/internal/throughput"
@@ -74,12 +75,6 @@ func loadConfigFile(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
-}
-
-type runState struct {
-	Telemetry      []telemetry.TelemetrySample
-	LastAction     time.Time
-	CurConcurrency int
 }
 
 func detectConfigPath(args []string) string {
@@ -148,15 +143,6 @@ func normalizeConfig(cfg *Config) error {
 		cfg.LogMaxSizeMB = 50
 	}
 	return nil
-}
-
-func appendTelemetry(samples []telemetry.TelemetrySample, s telemetry.TelemetrySample) []telemetry.TelemetrySample {
-	samples = append(samples, s)
-	const maxSamples = 300
-	if len(samples) > maxSamples {
-		samples = samples[len(samples)-maxSamples:]
-	}
-	return samples
 }
 
 func main() {
@@ -270,131 +256,34 @@ func main() {
 	telemetryCollector := telemetry.NewCollector()
 	th := throughput.NewTracker(time.Duration(cfg.ThroughputWindowSec)*time.Second, time.Duration(cfg.BaselineWindowSec)*time.Second)
 
-	state := runState{
-		CurConcurrency: cfg.StartConcurrency,
+	engineCfg := engine.Config{
+		Command:               cfg.Command,
+		PollInterval:          time.Duration(cfg.PollIntervalSec) * time.Second,
+		SoftTemp:              cfg.SoftTemp,
+		HardTemp:              cfg.HardTemp,
+		MinConcurrency:        cfg.MinConcurrency,
+		MaxConcurrency:        cfg.MaxConcurrency,
+		StartConcurrency:      cfg.StartConcurrency,
+		ThroughputFloorRatio:  cfg.ThroughputFloorRatio,
+		AdjustmentCooldown:    time.Duration(cfg.AdjustmentCooldownSec) * time.Second,
+		ThroughputWindow:      time.Duration(cfg.ThroughputWindowSec) * time.Second,
+		ThroughputFloorWindow: time.Duration(cfg.ThroughputFloorWindowSec) * time.Second,
+		BaselineWindow:        time.Duration(cfg.BaselineWindowSec) * time.Second,
+		MaxTicks:              cfg.MaxTicks,
 	}
 
-	if err := aw.Start(ctx, cfg.Command, state.CurConcurrency); err != nil {
-		log.Error("failed to start workload", map[string]interface{}{"error": err.Error()})
-		os.Exit(1)
-	}
-	defer func() {
-		_ = aw.Stop()
-		log.Info("workload stopped", map[string]interface{}{
-			"pid": aw.GetPID(),
+	eng := engine.New(
+		engineCfg,
+		aw,
+		controller,
+		telemetryCollector,
+		th,
+		log,
+	)
+	if _, err := eng.Start(ctx); err != nil {
+		log.Error("engine failed", map[string]interface{}{
+			"error": err.Error(),
 		})
-	}()
-
-	log.Info("workload started", map[string]interface{}{
-		"pid":             aw.GetPID(),
-		"workload_log":    cfg.WorkloadLogPath,
-		"concurrency":     state.CurConcurrency,
-		"throughput_path": cfg.WorkloadLogPath,
-	})
-
-	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSec) * time.Second)
-	defer ticker.Stop()
-	tickCount := 0
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("shutdown requested", map[string]interface{}{
-				"ticks": len(state.Telemetry),
-			})
-			return
-		case now := <-ticker.C:
-			tickCount++
-			if cfg.MaxTicks > 0 && tickCount > cfg.MaxTicks {
-				log.Info("max-ticks reached", map[string]interface{}{
-					"ticks":     tickCount - 1,
-					"max_ticks": cfg.MaxTicks,
-				})
-				return
-			}
-
-			if !aw.IsRunning() {
-				log.Error("workload process exited unexpectedly", map[string]interface{}{
-					"pid": aw.GetPID(),
-				})
-				return
-			}
-
-			ts := telemetryCollector.Sample(ctx)
-			state.Telemetry = appendTelemetry(state.Telemetry, ts)
-
-			outBytes := aw.OutputBytes()
-			tpSample := th.Add(outBytes, now)
-
-			actionState := control.State{
-				CurrentConcurrency: state.CurConcurrency,
-				MinConcurrency:     cfg.MinConcurrency,
-				MaxConcurrency:     cfg.MaxConcurrency,
-				BaselineThroughput: th.Baseline(),
-				LastActionAt:       state.LastAction,
-			}
-			action := controller.Decide(state.Telemetry, th.Samples(), actionState)
-			cooldownDur := time.Duration(cfg.AdjustmentCooldownSec) * time.Second
-			if action.Type != control.ActionHold && !state.LastAction.IsZero() && now.Sub(state.LastAction) < cooldownDur {
-				action = control.Action{Type: control.ActionHold, Concurrency: state.CurConcurrency, Reason: "cooldown"}
-			}
-
-			var throughputRatio float64
-			if th.Baseline() > 0 {
-				throughputRatio = tpSample.Throughput / th.Baseline()
-			}
-
-			if action.Type != control.ActionHold {
-				if action.Concurrency < cfg.MinConcurrency {
-					action.Type = control.ActionHold
-					action.Concurrency = cfg.MinConcurrency
-					action.Reason = "at minimum"
-				}
-				if action.Concurrency > cfg.MaxConcurrency {
-					action.Type = control.ActionHold
-					action.Concurrency = cfg.MaxConcurrency
-					action.Reason = "at maximum"
-				}
-			}
-
-			log.Info("tick", map[string]interface{}{
-				"timestamp":          now.Format(time.RFC3339),
-				"pid":                aw.GetPID(),
-				"action":             action.Type,
-				"action_reason":      action.Reason,
-				"concurrency":        state.CurConcurrency,
-				"target_concurrency": action.Concurrency,
-				"temp_c":             ts.TempC,
-				"temp_valid":         ts.TempValid,
-				"util_pct":           ts.UtilPct,
-				"util_valid":         ts.UtilValid,
-				"vram_used_mb":       ts.VramUsedMB,
-				"vram_total_mb":      ts.VramTotalMB,
-				"vram_valid":         ts.VramTotalValid && ts.VramUsedValid,
-				"throughput_bps":     tpSample.Throughput,
-				"baseline_bps":       th.Baseline(),
-				"throughput_ratio":   throughputRatio,
-				"telemetry_error":    ts.Error,
-			})
-
-			if action.Type == control.ActionHold {
-				continue
-			}
-
-			state.LastAction = now
-			if err := aw.Restart(ctx, action.Concurrency); err != nil {
-				log.Error("failed to restart workload", map[string]interface{}{
-					"error":              err.Error(),
-					"target_concurrency": action.Concurrency,
-				})
-				continue
-			}
-			state.CurConcurrency = action.Concurrency
-			th.Reset()
-			log.Info("workload_restarted", map[string]interface{}{
-				"new_concurrency": state.CurConcurrency,
-				"pid":             aw.GetPID(),
-			})
-		}
+		os.Exit(1)
 	}
 }
