@@ -226,10 +226,26 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
     - Updated `internal/control/controller_test.go`:
       - `TestRuleController_DecreaseOnHardTemp` now asserts pause-on-hard-temp behavior.
       - `TestRuleController_PausesOnHardVramCeiling` added for hard memory enforcement.
-4. **[ ] Security + privacy (NFR-8.4)**
+4. **[x] Security + privacy (NFR-8.4)**
   - Keep local-only defaults.
   - No outbound telemetry by default.
   - Optional auth when binding outside localhost.
+  - Completed:
+    - `internal/daemon/daemon.go` now supports optional API token auth for non-local binds:
+      - `NewServer` accepts optional token (env fallback `GUARDIAN_DAEMON_API_TOKEN`).
+      - Auth gating added via `wrapAuth`, `isAuthorized`, and loopback detection helpers.
+      - Loopback binds remain token-free by default.
+    - `cmd/guardian/main.go` adds `--auth-token` daemon flag (defaulting to `GUARDIAN_DAEMON_API_TOKEN` when set).
+    - `npm/lib/client.js` and `python/src/gpu_guardian/client.py` now read `GUARDIAN_DAEMON_API_TOKEN` and send `Authorization: Bearer ...`.
+    - Added tests:
+      - `internal/daemon/daemon_test.go`:
+        - `TestServerAllowsLoopbackWithoutAuth`
+        - `TestServerRejectsRemoteRequestsWhenTokenConfigured`
+        - `TestServerAllowsRemoteRequestsWithValidBearerToken`
+        - `TestServerAllowsRemoteWithoutAuthToken`
+      - `npm/test/client.test.js` (auth header flow when env token is set).
+      - `python/tests/test_client.py` (auth header flow when env token is set).
+    - `README.md` documents daemon auth defaults and `--auth-token` / `GUARDIAN_DAEMON_API_TOKEN` behavior.
 5. **[ ] Portability + build/delivery (Section 8.5, DIST-1..4)**
   - Linux-first support with optional Windows later.
   - Multi-arch/multi-platform binaries produced by CI.

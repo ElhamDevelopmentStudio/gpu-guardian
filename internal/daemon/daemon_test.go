@@ -39,6 +39,76 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestServerAllowsLoopbackWithoutAuth(t *testing.T) {
+	s := NewServer("127.0.0.1:8090")
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	r, err := http.Get(ts.URL + "/v1/health")
+	if err != nil {
+		t.Fatalf("health request failed: %v", err)
+	}
+	defer r.Body.Close()
+
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("expected loopback endpoint to be open without auth, got %d", r.StatusCode)
+	}
+}
+
+func TestServerRejectsRemoteRequestsWhenTokenConfigured(t *testing.T) {
+	s := NewServer("0.0.0.0:0", "shhh-secret")
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	r, err := http.Get(ts.URL + "/v1/health")
+	if err != nil {
+		t.Fatalf("health request failed: %v", err)
+	}
+	defer r.Body.Close()
+
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when auth token missing, got %d", r.StatusCode)
+	}
+}
+
+func TestServerAllowsRemoteRequestsWithValidBearerToken(t *testing.T) {
+	const token = "shhh-secret"
+	s := NewServer("0.0.0.0:0", token)
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	r, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/health", nil)
+	if err != nil {
+		t.Fatalf("create request failed: %v", err)
+	}
+	r.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatalf("authorized health request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for valid token, got %d", resp.StatusCode)
+	}
+}
+
+func TestServerAllowsRemoteWithoutAuthToken(t *testing.T) {
+	s := NewServer("0.0.0.0:0")
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	r, err := http.Get(ts.URL + "/v1/health")
+	if err != nil {
+		t.Fatalf("health request failed: %v", err)
+	}
+	defer r.Body.Close()
+
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for remote endpoint without auth token, got %d", r.StatusCode)
+	}
+}
+
 func TestSessionLifecycleEndpoint(t *testing.T) {
 	s := NewServer(DefaultListenAddress)
 	ts := httptest.NewServer(s)

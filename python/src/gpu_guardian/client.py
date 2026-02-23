@@ -3,6 +3,7 @@ import os
 from urllib import error, request
 
 DEFAULT_DAEMON_BASE_URL = "http://127.0.0.1:8090/v1"
+DEFAULT_DAEMON_API_TOKEN = "GUARDIAN_DAEMON_API_TOKEN"
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
@@ -11,13 +12,16 @@ class ClientError(RuntimeError):
 
 
 class GuardianClient:
-  def __init__(self, base_url=None, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
+  def __init__(self, base_url=None, timeout_seconds=DEFAULT_TIMEOUT_SECONDS, api_token=None):
     self.base_url = (
       base_url
       or os.environ.get("GUARDIAN_DAEMON_BASE_URL")
       or DEFAULT_DAEMON_BASE_URL
     )
     self.timeout_seconds = timeout_seconds
+    self.api_token = api_token if api_token is not None else os.environ.get(
+      DEFAULT_DAEMON_API_TOKEN
+    )
 
   def _request(self, method, path, payload=None):
     if not self.base_url:
@@ -32,6 +36,8 @@ class GuardianClient:
       data = json.dumps(payload).encode("utf-8")
       headers["Content-Type"] = "application/json"
       headers["Content-Length"] = str(len(data))
+    if self.api_token:
+      headers["Authorization"] = f"Bearer {self.api_token}"
 
     req = request.Request(
       url,

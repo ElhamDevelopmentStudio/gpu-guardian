@@ -69,8 +69,18 @@ async function main() {
     status: 200,
     body: { session_id: "default", session: {} },
   });
+  let requiredAuthHeader = "";
 
   const { server, port } = await createServer(routes, ({ req, res, payload }) => {
+    if (
+      requiredAuthHeader &&
+      req.headers["authorization"] !== requiredAuthHeader
+    ) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
     const route = routes.get(req.url);
     if (req.url === "/v1/sessions" && req.method === "POST") {
       lastCall = { url: req.url, method: req.method, payload };
@@ -174,6 +184,15 @@ async function main() {
     api.routes.metrics.path,
     `/${api.api_version}/metrics`
   );
+
+  const apiToken = "client-secret";
+  requiredAuthHeader = `Bearer ${apiToken}`;
+  process.env.GUARDIAN_DAEMON_API_TOKEN = apiToken;
+  const authClient = new GuardianClient({ baseUrl: `http://127.0.0.1:${port}/v1` });
+  const authenticatedHealth = await authClient.health();
+  assert.deepStrictEqual(authenticatedHealth, { status: "ok" });
+  delete process.env.GUARDIAN_DAEMON_API_TOKEN;
+  requiredAuthHeader = "";
 
   delete process.env.GUARDIAN_DAEMON_BASE_URL;
 

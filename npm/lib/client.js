@@ -3,6 +3,7 @@ const https = require("node:https");
 const { URL } = require("node:url");
 
 const DEFAULT_DAEMON_BASE_URL = "http://127.0.0.1:8090/v1";
+const DEFAULT_DAEMON_API_TOKEN = "GUARDIAN_DAEMON_API_TOKEN";
 
 class GuardianClient {
   constructor(options = {}) {
@@ -11,6 +12,8 @@ class GuardianClient {
       process.env.GUARDIAN_DAEMON_BASE_URL ||
       DEFAULT_DAEMON_BASE_URL;
     this.timeoutMs = options.timeoutMs || 5000;
+    this.apiToken =
+      options.apiToken || process.env[DEFAULT_DAEMON_API_TOKEN] || "";
   }
 
   async _request(method, pathname, body) {
@@ -21,6 +24,9 @@ class GuardianClient {
     const payload =
       body === undefined ? null : JSON.stringify(body);
     const headers = {};
+    if (this.apiToken) {
+      headers["authorization"] = `Bearer ${this.apiToken}`;
+    }
     if (payload !== null) {
       headers["content-type"] = "application/json";
       headers["content-length"] = Buffer.byteLength(payload);

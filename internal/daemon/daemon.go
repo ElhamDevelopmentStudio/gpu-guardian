@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -130,9 +132,11 @@ type SessionStateResponse struct {
 
 // Server is the daemon process HTTP facade.
 type Server struct {
-	mu      sync.Mutex
-	running map[string]*sessionState
-	ln      string
+	mu           sync.Mutex
+	running      map[string]*sessionState
+	ln           string
+	authToken    string
+	authRequired bool
 }
 
 type sessionState struct {
@@ -155,10 +159,20 @@ type sessionState struct {
 	recoveryCooldown   time.Duration
 }
 
-func NewServer(listen string) *Server {
+func NewServer(listen string, tokens ...string) *Server {
+	token := ""
+	if len(tokens) > 0 {
+		token = strings.TrimSpace(tokens[0])
+	}
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("GUARDIAN_DAEMON_API_TOKEN"))
+	}
+
 	return &Server{
-		ln:      listen,
-		running: map[string]*sessionState{},
+		ln:           listen,
+		running:      map[string]*sessionState{},
+		authToken:    token,
+		authRequired: token != "" && !isLocalListenAddress(listen),
 	}
 }
 
@@ -175,12 +189,58 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handler() http.Handler {
 	h := http.NewServeMux()
-	h.HandleFunc("/v1/health", s.handleHealth)
-	h.HandleFunc("/v1/metrics", s.handleMetrics)
-	h.HandleFunc("/v1/control", s.handleControl)
-	h.HandleFunc("/v1/sessions", s.handleSessions)
-	h.HandleFunc("/v1/sessions/", s.handleSession)
+	h.HandleFunc("/v1/health", s.wrapAuth(s.handleHealth))
+	h.HandleFunc("/v1/metrics", s.wrapAuth(s.handleMetrics))
+	h.HandleFunc("/v1/control", s.wrapAuth(s.handleControl))
+	h.HandleFunc("/v1/sessions", s.wrapAuth(s.handleSessions))
+	h.HandleFunc("/v1/sessions/", s.wrapAuth(s.handleSession))
 	return h
+}
+
+func (s *Server) wrapAuth(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	if !s.authRequired {
+		return next
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isAuthorized(r, s.authToken) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func isAuthorized(r *http.Request, token string) bool {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if header == "" {
+		header = strings.TrimSpace(r.Header.Get("X-API-Token"))
+	}
+	if header == "" {
+		return false
+	}
+	lower := strings.ToLower(header)
+	if strings.HasPrefix(lower, "bearer ") {
+		header = strings.TrimSpace(header[len("Bearer "):])
+	}
+	return subtle.ConstantTimeCompare([]byte(header), []byte(token)) == 1
+}
+
+func isLocalListenAddress(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		host = listen
+	}
+	if host == "" {
+		return false
+	}
+	if host == "localhost" || host == "::1" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

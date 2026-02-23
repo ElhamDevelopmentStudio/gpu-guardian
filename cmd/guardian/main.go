@@ -334,10 +334,11 @@ func printUsage() {
 func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	listen := fs.String("listen", daemon.DefaultListenAddress, "Daemon listen address")
+	authToken := fs.String("auth-token", strings.TrimSpace(os.Getenv("GUARDIAN_DAEMON_API_TOKEN")), "Optional API token for non-local daemon binds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	server := daemon.NewServer(*listen)
+	server := daemon.NewServer(*listen, *authToken)
 	return server.Serve()
 }
 

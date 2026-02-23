@@ -14,6 +14,12 @@ with open(CONTRACT_PATH, "r", encoding="utf-8") as fp:
 class _Handler(BaseHTTPRequestHandler):
   routes = {}
   last_call = None
+  expected_auth = None
+
+  def _is_authorized(self):
+    if self.__class__.expected_auth is None:
+      return True
+    return self.headers.get("Authorization") == self.__class__.expected_auth
 
   def _send_json(self, status, payload):
     body = json.dumps(payload).encode("utf-8")
@@ -24,6 +30,9 @@ class _Handler(BaseHTTPRequestHandler):
     self.wfile.write(body)
 
   def do_GET(self):
+    if not self._is_authorized():
+      self._send_json(401, {"error": "unauthorized"})
+      return
     route = self.routes.get((self.command, self.path))
     if route is None:
       self._send_json(404, {"error": "not found"})
@@ -31,6 +40,9 @@ class _Handler(BaseHTTPRequestHandler):
     self._send_json(route["status"], route["body"])
 
   def do_POST(self):
+    if not self._is_authorized():
+      self._send_json(401, {"error": "unauthorized"})
+      return
     length = int(self.headers.get("Content-Length", "0") or 0)
     raw = self.rfile.read(length).decode("utf-8") if length else "{}"
     payload = {}
@@ -153,10 +165,17 @@ def test_client_contract():
     assert handler.last_call["method"] == api["routes"]["control"]["method"]
     assert api["routes"]["metrics"]["path"] == f"/{api['api_version']}/metrics"
     assert api["routes"]["health"]["method"] == "GET"
+
+    api_token = "client-secret"
+    handler.expected_auth = f"Bearer {api_token}"
+    os.environ["GUARDIAN_DAEMON_API_TOKEN"] = api_token
+    auth_client = GuardianClient(base_url=f"http://127.0.0.1:{port}/v1")
+    assert auth_client.health() == {"status": "ok"}
   finally:
     server.shutdown()
     server.server_close()
     os.environ.pop("GUARDIAN_DAEMON_BASE_URL", None)
+    os.environ.pop("GUARDIAN_DAEMON_API_TOKEN", None)
 
 
 def main():

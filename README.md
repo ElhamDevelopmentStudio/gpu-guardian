@@ -55,6 +55,22 @@ guardian simulate --telemetry-log telemetry.log --control-log guardian.log --ini
 guardian observe --session-id default
 ```
 
+Daemon and API security:
+
+```bash
+guardian daemon --listen 127.0.0.1:8090
+```
+
+```bash
+guardian daemon --listen 0.0.0.0:8090 --auth-token your-secret-token
+```
+
+Clients also use environment tokens automatically:
+
+```bash
+GUARDIAN_DAEMON_API_TOKEN=your-secret-token guardian observe --session-id default
+```
+
 All flags:
 
 - `--cmd` command to run
@@ -81,6 +97,7 @@ All flags:
 - `--workload-log`
 - `--echo-workload-output`
 - `--max-ticks` (test/benchmark helper; runs loop for finite iterations)
+- `--auth-token` (daemon mode; optional API token)
 - `--calibration-step-duration-sec` (calibrate mode)
 - `--min-concurrency`, `--max-concurrency`, `--concurrency-step` (calibrate mode)
 - `--step-samples`, `--warmup-samples` (calibrate mode)
