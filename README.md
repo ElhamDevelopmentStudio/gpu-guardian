@@ -48,6 +48,10 @@ guardian report --control-log guardian.log --telemetry-log telemetry.log --throu
 ```
 
 ```bash
+guardian report --control-log guardian.log --telemetry-log telemetry.log --evaluate --min-runtime-above-floor-ratio 0.95 --max-slowdown-ratio 0.2 --max-slowdown-duration-sec 30 --thermal-ceiling-c 84 --output success-report.json
+```
+
+```bash
 guardian simulate --telemetry-log telemetry.log --control-log guardian.log --initial-baseline-throughput 120 --max-concurrency 8 --output simulate.json
 ```
 
@@ -106,6 +110,7 @@ All flags:
 - `--profile-path` (shared profile persistence path, default `.guardian-profiles.json`)
 - `--workload-type` (profile namespace key for `control` resume and `calibrate` persistence)
 - `--control-log`, `--telemetry-log`, `--throughput-floor-ratio`, `--output` (report mode)
+- `--evaluate`, `--max-slowdown-ratio`, `--max-slowdown-duration-sec`, `--min-runtime-above-floor-ratio`, `--thermal-ceiling-c`, `--check-thermal-ceiling`, `--check-daemon-api` (report evaluation mode)
 - `--telemetry-log`, `--control-log`, `--initial-baseline-throughput`, `--event-log`, `--output` (simulate mode)
   - `--session-id`, `--all`, `--telemetry`, `--output` (observe mode)
 

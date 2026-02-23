@@ -84,3 +84,100 @@ func TestGenerateReportFromTelemetryFallback(t *testing.T) {
 		t.Fatalf("expected zero slowdown with ratio=1, got %f", rep.WorstSlowdown)
 	}
 }
+
+func TestEvaluateSuccessCriteriaPassesForHealthyRun(t *testing.T) {
+	tmp := t.TempDir()
+	controlPath := filepath.Join(tmp, "control.log")
+	telemetryPath := filepath.Join(tmp, "telemetry.log")
+
+	controlLines := []string{
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_valid":true,"temp_c":60,"ts":"2026-01-01T00:00:00Z","timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_valid":true,"temp_c":61,"ts":"2026-01-01T00:00:01Z","timestamp":"2026-01-01T00:00:01Z"}`,
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_valid":true,"temp_c":62,"ts":"2026-01-01T00:00:02Z","timestamp":"2026-01-01T00:00:02Z"}`,
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_valid":true,"temp_c":63,"ts":"2026-01-01T00:00:03Z","timestamp":"2026-01-01T00:00:03Z"}`,
+	}
+	writeLines(t, controlPath, controlLines)
+
+	telemetryLines := []string{
+		`{"temp_c":60,"temp_valid":true,"timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"temp_c":64,"temp_valid":true,"timestamp":"2026-01-01T00:00:01Z"}`,
+		`{"temp_c":66,"temp_valid":true,"timestamp":"2026-01-01T00:00:02Z"}`,
+	}
+	writeLines(t, telemetryPath, telemetryLines)
+
+	got, err := EvaluateSuccessCriteria(controlPath, telemetryPath, SuccessCriteriaPolicy{
+		ThroughputFloorRatio:      0.7,
+		MaxSustainedSlowdownRatio: 0.2,
+		MaxSustainedSlowdownSec:   3,
+		MinRuntimeAboveFloorRatio: 0.95,
+		ThermalCeilingC:           70,
+	})
+	if err != nil {
+		t.Fatalf("evaluate success criteria: %v", err)
+	}
+	if !got.Passed {
+		t.Fatalf("expected healthy run to pass, checks=%+v", got.Checks)
+	}
+	if got.RuntimeSec != 3 {
+		t.Fatalf("expected runtime 3, got %.3f", got.RuntimeSec)
+	}
+}
+
+func TestEvaluateSuccessCriteriaFailsOnSustainedSlowdown(t *testing.T) {
+	tmp := t.TempDir()
+	controlPath := filepath.Join(tmp, "control.log")
+	controlLines := []string{
+		`{"event":"engine_tick","throughput_ratio":0.6,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"ts":"2026-01-01T00:00:00Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"ts":"2026-01-01T00:00:01Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"ts":"2026-01-01T00:00:02Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"ts":"2026-01-01T00:00:03Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"ts":"2026-01-01T00:00:04Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"ts":"2026-01-01T00:00:05Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"ts":"2026-01-01T00:00:06Z"}`,
+	}
+	writeLines(t, controlPath, controlLines)
+
+	got, err := EvaluateSuccessCriteria(controlPath, "", SuccessCriteriaPolicy{
+		ThroughputFloorRatio:      0.7,
+		MaxSustainedSlowdownRatio: 0.2,
+		MaxSustainedSlowdownSec:   2,
+		RequireThermalSafetyCheck: false,
+		RequireFloorUptimeCheck:   false,
+	})
+	if err != nil {
+		t.Fatalf("evaluate success criteria: %v", err)
+	}
+	if got.Passed {
+		t.Fatalf("expected sustained slowdown to fail, got %+v", got)
+	}
+}
+
+func TestEvaluateSuccessCriteriaFailsThermalCeilingViolation(t *testing.T) {
+	tmp := t.TempDir()
+	controlPath := filepath.Join(tmp, "control.log")
+	telemetryPath := filepath.Join(tmp, "telemetry.log")
+	controlLines := []string{
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_valid":true,"temp_c":60,"ts":"2026-01-01T00:00:00Z"}`,
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_valid":true,"temp_c":62,"ts":"2026-01-01T00:00:01Z"}`,
+	}
+	writeLines(t, controlPath, controlLines)
+	writeLines(t, telemetryPath, []string{
+		`{"temp_c":84,"temp_valid":true,"timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"temp_c":90,"temp_valid":true,"timestamp":"2026-01-01T00:00:01Z"}`,
+	})
+
+	got, err := EvaluateSuccessCriteria(controlPath, telemetryPath, SuccessCriteriaPolicy{
+		ThroughputFloorRatio:      0.7,
+		MaxSustainedSlowdownRatio: 0.2,
+		MaxSustainedSlowdownSec:   30,
+		ThermalCeilingC:           85,
+		RequireSlowdownCheck:      false,
+		RequireFloorUptimeCheck:   false,
+	})
+	if err != nil {
+		t.Fatalf("evaluate success criteria: %v", err)
+	}
+	if got.Passed {
+		t.Fatalf("expected thermal ceiling violation to fail, got %+v", got)
+	}
+}

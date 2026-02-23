@@ -652,6 +652,16 @@ func runReport(args []string) error {
 	controlLog := fs.String("control-log", "", "Path to control log JSONL file")
 	telemetryLog := fs.String("telemetry-log", "", "Path to telemetry log JSONL file")
 	floor := fs.Float64("throughput-floor-ratio", 0.7, "Throughput floor ratio used for recovery summary")
+	evaluate := fs.Bool("evaluate", false, "Evaluate success criteria gates (section 11)")
+	maxSlowdownRatio := fs.Float64("max-slowdown-ratio", 0.2, "Throughput ratio threshold for sustained slowdown check (default 0.2 = 5x)")
+	maxSlowdownSec := fs.Int("max-slowdown-duration-sec", 30, "Max sustained duration below slowdown ratio")
+	minRuntimeUptimeRatio := fs.Float64("min-runtime-above-floor-ratio", 0.95, "Minimum required ratio of runtime above throughput floor")
+	thermalCeiling := fs.Float64("thermal-ceiling-c", 84, "Thermal ceiling C used by success criteria check (<=0 disables)")
+	checkThermal := fs.Bool("check-thermal-ceiling", true, "Enable thermal ceiling success criterion")
+	checkDaemonAPI := fs.Bool("check-daemon-api", false, "Validate daemon API stability")
+	daemonAPIBase := fs.String("daemon-base-url", daemonBaseURL, "Daemon API base URL with /v1 prefix (for --check-daemon-api)")
+	daemonAPIConnTimeout := fs.Int("daemon-api-timeout-ms", 500, "Daemon API check timeout in milliseconds")
+	daemonAPIToken := fs.String("daemon-api-token", strings.TrimSpace(os.Getenv("GUARDIAN_DAEMON_API_TOKEN")), "Optional daemon API token")
 	outputPath := fs.String("output", "", "Write report JSON to this path")
 
 	if err := fs.Parse(args); err != nil {
@@ -667,6 +677,40 @@ func runReport(args []string) error {
 	}
 
 	payload, err := json.MarshalIndent(rep, "", "  ")
+	if *evaluate {
+		criteria, err := report.EvaluateSuccessCriteria(strings.TrimSpace(*controlLog), strings.TrimSpace(*telemetryLog), report.SuccessCriteriaPolicy{
+			ThroughputFloorRatio:      *floor,
+			MaxSustainedSlowdownRatio: *maxSlowdownRatio,
+			MaxSustainedSlowdownSec:   float64(*maxSlowdownSec),
+			MinRuntimeAboveFloorRatio: *minRuntimeUptimeRatio,
+			ThermalCeilingC:           int(*thermalCeiling),
+			RequireFloorUptimeCheck:   true,
+			RequireSlowdownCheck:      true,
+			RequireThermalSafetyCheck: *checkThermal,
+			CheckDaemonAPI:            *checkDaemonAPI,
+			DaemonBaseURL:             *daemonAPIBase,
+			DaemonAPIToken:            *daemonAPIToken,
+			DaemonAPITimeout:          time.Duration(*daemonAPIConnTimeout) * time.Millisecond,
+		})
+		if err != nil {
+			return fmt.Errorf("evaluate success criteria: %w", err)
+		}
+		type reportEvaluation struct {
+			Report          report.SessionReport         `json:"report"`
+			SuccessCriteria report.SuccessCriteriaResult `json:"success_criteria"`
+		}
+		payload, err = json.MarshalIndent(reportEvaluation{
+			Report:          rep,
+			SuccessCriteria: criteria,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("serialize evaluated report: %w", err)
+		}
+		if !criteria.Passed {
+			return fmt.Errorf("success criteria failed")
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("serialize report: %w", err)
 	}

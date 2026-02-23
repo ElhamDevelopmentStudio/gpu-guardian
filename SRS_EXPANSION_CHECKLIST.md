@@ -262,12 +262,30 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
       - Creates `.tar.gz` or `.zip` archives for artifacts.
       - Emits `dist/checksums.txt` with SHA-256 checksums.
       - Publishes artifacts on `v*` tags (or manual dispatch) via `softprops/action-gh-release`.
-6. **[ ] Success criteria gates (Section 11)**
+6. **[x] Success criteria gates (Section 11)**
   - No sustained 4–5× slowdown.
   - ≥ 95% runtime above throughput floor.
   - Zero thermal ceiling violations.
   - Stable daemon API.
   - npm + pip usability without Go.
+  - Completed:
+    - Added success criteria evaluator in `internal/report/success_criteria.go`:
+      - `EvaluateSuccessCriteria(...)` produces pass/fail gates for:
+        - sustained slowdown window (`max_slowdown_ratio`, `max_slowdown_duration_sec`),
+        - runtime above throughput floor (`min_runtime_above_floor_ratio`),
+        - thermal ceiling guard (`thermal_ceiling_c`),
+        - optional daemon API stability probe (`/health`, `/metrics`, `/sessions`).
+    - Extended `guardian report --evaluate` with flags:
+      - `--evaluate`, `--max-slowdown-ratio`, `--max-slowdown-duration-sec`, `--min-runtime-above-floor-ratio`, `--thermal-ceiling-c`, `--check-thermal-ceiling`, `--check-daemon-api`, `--daemon-base-url`, `--daemon-api-token`, `--daemon-api-timeout-ms`.
+    - Added unit tests:
+      - `internal/report/report_test.go`:
+        - `TestEvaluateSuccessCriteriaPassesForHealthyRun`
+        - `TestEvaluateSuccessCriteriaFailsOnSustainedSlowdown`
+        - `TestEvaluateSuccessCriteriaFailsThermalCeilingViolation`
+    - Added integration tests:
+      - `cmd/guardian/main_test.go`:
+        - `TestReportCommandEvaluatesSuccessCriteria`
+        - `TestReportCommandFailsWhenCriteriaNotMet`
 
 ## P6 — Optional advanced extensions (from future section)
 

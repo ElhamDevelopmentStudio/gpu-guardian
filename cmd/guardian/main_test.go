@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/elhamdev/gpu-guardian/internal/daemon"
+	"github.com/elhamdev/gpu-guardian/internal/report"
 )
 
 func TestControlLoopE2EWithMaxTicks(t *testing.T) {
@@ -310,6 +311,87 @@ func TestReportCommand(t *testing.T) {
 	}
 	if got.TimeBelowFloor != 2 {
 		t.Fatalf("expected 2 seconds below throughput floor, got %.1f", got.TimeBelowFloor)
+	}
+}
+
+func TestReportCommandEvaluatesSuccessCriteria(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	controlLog := filepath.Join(tmpDir, "control.log")
+	telemetryLog := filepath.Join(tmpDir, "telemetry.log")
+	outputPath := filepath.Join(tmpDir, "report-eval.json")
+
+	controlLines := []string{
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"action":"hold","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:00Z","timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_c":61,"temp_valid":true,"action":"hold","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:01Z","timestamp":"2026-01-01T00:00:01Z"}`,
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_c":62,"temp_valid":true,"action":"hold","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:02Z","timestamp":"2026-01-01T00:00:02Z"}`,
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_c":63,"temp_valid":true,"action":"hold","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:03Z","timestamp":"2026-01-01T00:00:03Z"}`,
+	}
+	writeFixtureLines(t, controlLog, controlLines)
+	writeFixtureLines(t, telemetryLog, []string{
+		`{"temp_c":60,"temp_valid":true,"timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"temp_c":61,"temp_valid":true,"timestamp":"2026-01-01T00:00:01Z"}`,
+	})
+
+	cmd := execCommand(ctx, "go", "run", ".", "report",
+		"--control-log", controlLog,
+		"--telemetry-log", telemetryLog,
+		"--throughput-floor-ratio", "0.7",
+		"--evaluate",
+		"--min-runtime-above-floor-ratio", "0.95",
+		"--max-slowdown-ratio", "0.2",
+		"--max-slowdown-duration-sec", "30",
+		"--thermal-ceiling-c", "85",
+		"--output", outputPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("report command evaluate failed: %v; out=%s", err, string(out))
+	}
+
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("expected report output at %s: %v", outputPath, err)
+	}
+	var got struct {
+		SuccessCriteria report.SuccessCriteriaResult `json:"success_criteria"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode report evaluate output: %v", err)
+	}
+	if !got.SuccessCriteria.Passed {
+		t.Fatalf("expected criteria to pass: %+v", got.SuccessCriteria)
+	}
+}
+
+func TestReportCommandFailsWhenCriteriaNotMet(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	controlLog := filepath.Join(tmpDir, "control.log")
+
+	controlLines := []string{
+		`{"event":"engine_tick","throughput_ratio":1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"action":"hold","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:00Z","timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"action":"decrease","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:01Z","timestamp":"2026-01-01T00:00:01Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"action":"decrease","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:02Z","timestamp":"2026-01-01T00:00:02Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"action":"decrease","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:03Z","timestamp":"2026-01-01T00:00:03Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"action":"decrease","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:04Z","timestamp":"2026-01-01T00:00:04Z"}`,
+		`{"event":"engine_tick","throughput_ratio":0.1,"throughput_ratio_valid":true,"temp_c":60,"temp_valid":true,"action":"decrease","concurrency":1,"target_concurrency":1,"ts":"2026-01-01T00:00:05Z","timestamp":"2026-01-01T00:00:05Z"}`,
+	}
+	writeFixtureLines(t, controlLog, controlLines)
+
+	cmd := execCommand(ctx, "go", "run", ".", "report",
+		"--control-log", controlLog,
+		"--evaluate",
+		"--max-slowdown-duration-sec", "2",
+		"--thermal-ceiling-c", "85",
+		"--throughput-floor-ratio", "0.7",
+		"--output", filepath.Join(tmpDir, "eval.json"),
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("expected report evaluate to fail, got success: %s", string(out))
 	}
 }
 
