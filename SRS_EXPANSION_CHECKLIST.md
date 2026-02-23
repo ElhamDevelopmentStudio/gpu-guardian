@@ -137,9 +137,18 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
      - `internal/telemetry/telemetry_test.go` (UUID parsing + fallback validation updates)
      - `cmd/guardian/main_test.go` (`TestControlLoadsProfileDefaults`)
 
-3. **[ ] FR-21 + FR-22 (Action/telemetry/decision logging + reports)**
-   - Enforce structured logs for telemetry, actions, parameter updates, throughput, decisions.
-   - Generate session report with: worst slowdown, time-below-floor, thermal profile, recovery metrics.
+3. **[x] FR-21 + FR-22 (Action/telemetry/decision logging + reports)**
+   - [x] Added `internal/report` with `SessionReport`, `ThermalProfile`, and `RecoveryMetrics`.
+   - [x] Added report generation from structured logs via `report.Generate(...)` with defaults for throughput floor.
+   - [x] Added CLI entrypoint `guardian report` with flags:
+     - `--control-log`
+     - `--telemetry-log`
+     - `--throughput-floor-ratio`
+     - `--output`
+   - [x] Added unit tests:
+     - `internal/report/report_test.go` (`TestGenerateReportFromControlLog`, `TestGenerateReportFromTelemetryFallback`)
+   - [x] Added integration test:
+     - `cmd/guardian/main_test.go` (`TestReportCommand`)
 
 4. **[ ] FR-23 + FR-24 (Replay and what-if mode)**
    - Add offline replay mode using recorded telemetry.

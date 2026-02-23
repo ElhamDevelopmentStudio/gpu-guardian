@@ -19,6 +19,7 @@ import (
 	"github.com/elhamdev/gpu-guardian/internal/daemon"
 	"github.com/elhamdev/gpu-guardian/internal/engine"
 	"github.com/elhamdev/gpu-guardian/internal/logger"
+	"github.com/elhamdev/gpu-guardian/internal/report"
 	"github.com/elhamdev/gpu-guardian/internal/telemetry"
 	"github.com/elhamdev/gpu-guardian/internal/throughput"
 )
@@ -298,6 +299,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "calibrate failed: %v\n", err)
 			os.Exit(1)
 		}
+	case "report":
+		if err := runReport(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "report failed: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		printUsage()
 		os.Exit(1)
@@ -309,6 +315,7 @@ func printUsage() {
 	fmt.Println("  daemon  [--listen=<addr>]")
 	fmt.Println("  control --cmd \"<command>\" [flags]")
 	fmt.Println("  calibrate --cmd \"<command>\" [flags]")
+	fmt.Println("  report [flags]")
 }
 
 func runDaemon(args []string) error {
@@ -622,6 +629,40 @@ func runCalibration(args []string) error {
 			return fmt.Errorf("write calibration profile: %w", err)
 		}
 	}
+	fmt.Println(string(payload))
+	return nil
+}
+
+func runReport(args []string) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	controlLog := fs.String("control-log", "", "Path to control log JSONL file")
+	telemetryLog := fs.String("telemetry-log", "", "Path to telemetry log JSONL file")
+	floor := fs.Float64("throughput-floor-ratio", 0.7, "Throughput floor ratio used for recovery summary")
+	outputPath := fs.String("output", "", "Write report JSON to this path")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*controlLog) == "" && strings.TrimSpace(*telemetryLog) == "" {
+		return fmt.Errorf("at least one of --control-log or --telemetry-log is required")
+	}
+
+	rep, err := report.Generate(strings.TrimSpace(*controlLog), strings.TrimSpace(*telemetryLog), *floor)
+	if err != nil {
+		return fmt.Errorf("generate report: %w", err)
+	}
+
+	payload, err := json.MarshalIndent(rep, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize report: %w", err)
+	}
+	if strings.TrimSpace(*outputPath) != "" {
+		if err := os.WriteFile(*outputPath, payload, 0o600); err != nil {
+			return fmt.Errorf("write report: %w", err)
+		}
+		return nil
+	}
+
 	fmt.Println(string(payload))
 	return nil
 }

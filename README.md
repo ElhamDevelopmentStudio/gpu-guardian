@@ -41,6 +41,10 @@ guardian control --cmd "python generate_xtts.py"
 guardian calibrate --cmd "python generate_xtts.py"
 ```
 
+```bash
+guardian report --control-log guardian.log --telemetry-log telemetry.log --throughput-floor-ratio 0.7 --output report.json
+```
+
 All flags:
 
 - `--cmd` command to run
@@ -74,6 +78,7 @@ All flags:
 - `--config <path>` (optional JSON config; values are defaults with overrides)
 - `--profile-path` (shared profile persistence path, default `.guardian-profiles.json`)
 - `--workload-type` (profile namespace key for `control` resume and `calibrate` persistence)
+- `--control-log`, `--telemetry-log`, `--throughput-floor-ratio`, `--output` (report mode)
 
 ### JSON config
 
@@ -125,6 +130,8 @@ State estimation fields are now included in run state and logs (`engine_tick`):
 
 - `go test ./...` runs unit tests
 - `go test ./... -tags=integration` runs the e2e integration test using a stub `nvidia-smi`
+- `go test ./... -tags=e2e` runs integration-style tests in e2e package mode
+- `go test ./... -tags=regression` keeps regression checks if package tags are used
 
 ## Notes
 
