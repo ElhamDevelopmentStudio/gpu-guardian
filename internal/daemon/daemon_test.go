@@ -93,7 +93,20 @@ func TestSessionLifecycleEndpoint(t *testing.T) {
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("expected telemetry 200, got %d", r.StatusCode)
 	}
-	defer r.Body.Close()
+	var telemetryResp TelemetryResponse
+	if err := json.NewDecoder(r.Body).Decode(&telemetryResp); err != nil {
+		t.Fatalf("decode telemetry response: %v", err)
+	}
+	if telemetryResp.SessionID != startResp.SessionID {
+		t.Fatalf("expected telemetry session id %s, got %q", startResp.SessionID, telemetryResp.SessionID)
+	}
+	if telemetryResp.Session.ID != startResp.SessionID {
+		t.Fatalf("expected session payload id %s, got %q", startResp.SessionID, telemetryResp.Session.ID)
+	}
+	if telemetryResp.Session.PolicyVersion != APIPolicyVersion {
+		t.Fatalf("expected policy version %q, got %q", APIPolicyVersion, telemetryResp.Session.PolicyVersion)
+	}
+	_ = r.Body.Close()
 
 	if err := postJSONWithNoBody(ts.URL+"/v1/sessions/"+startResp.SessionID+"/stop", http.MethodPost); err != nil {
 		t.Fatalf("failed to stop session: %v", err)

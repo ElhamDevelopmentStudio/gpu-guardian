@@ -169,7 +169,7 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
      - `TestObserveCommandReadsSessionJSON`
      - `TestObserveCommandFailsWithoutDaemon`
 
-2. **[ ] DR-2/4 + CLI consistency (session and telemetry status contract)**
+2. **[x] DR-2/4 + CLI consistency (session and telemetry status contract)**
    - Return aligned field names across CLI and API responses (state, policy version, last action, confidence).
 
 3. **[ ] FR-20 + FR-21 UX hooks (operator visibility)**

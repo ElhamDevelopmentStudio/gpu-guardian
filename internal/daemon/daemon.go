@@ -22,6 +22,7 @@ import (
 const (
 	DefaultListenAddress = "127.0.0.1:8090"
 	APIVersion           = "v1"
+	APIPolicyVersion     = "rule-v1"
 	defaultSessionID     = "default"
 
 	defaultRecoveryMaxRetries  = 1
@@ -99,6 +100,7 @@ type ErrorResponse struct {
 type SessionState struct {
 	ID               string                    `json:"id"`
 	Running          bool                      `json:"running"`
+	PolicyVersion    string                    `json:"policy_version"`
 	State            engine.RunState           `json:"state"`
 	StartedAt        time.Time                 `json:"started_at"`
 	StoppedAt        time.Time                 `json:"stopped_at"`
@@ -112,6 +114,14 @@ type SessionState struct {
 	Errors           []string                  `json:"errors"`
 	CheckpointPath   string                    `json:"checkpoint_path"`
 	TelemetryLogPath string                    `json:"telemetry_log_path"`
+	Confidence       float64                   `json:"confidence"`
+	ConfidenceValid  bool                      `json:"confidence_valid"`
+}
+
+type TelemetryResponse struct {
+	SessionID string                    `json:"session_id"`
+	Session   SessionState              `json:"session"`
+	Telemetry telemetry.TelemetrySample `json:"telemetry"`
 }
 
 type SessionStateResponse struct {
@@ -335,14 +345,16 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		telemetrySample := interface{}(sess.lastSample)
+		telemetrySample := sess.lastSample
 		if sess.result != nil {
 			telemetrySample = sess.result.State.LastTelemetry
 		}
+		sessionState := s.sessionSnapshot(id, sess)
 		s.mu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"session_id": id,
-			"telemetry":  telemetrySample,
+		writeJSON(w, http.StatusOK, TelemetryResponse{
+			SessionID: id,
+			Session:   sessionState,
+			Telemetry: telemetrySample,
 		})
 	default:
 		http.NotFound(w, r)
@@ -357,6 +369,7 @@ func (s *Server) sessionSnapshot(id string, sess *sessionState) SessionState {
 		ID:               id,
 		Mode:             sess.mode,
 		Goal:             sess.goal,
+		PolicyVersion:    APIPolicyVersion,
 		LastAction:       sess.lastAction,
 		LastSample:       sess.lastSample,
 		Retries:          sess.retries,
@@ -371,6 +384,9 @@ func (s *Server) sessionSnapshot(id string, sess *sessionState) SessionState {
 		sessState.State = sess.result.State
 		sessState.LastReason = sess.result.Reason
 		sessState.LastError = sess.lastErr
+		sessState.Confidence = sess.result.State.Estimate.Confidence
+		sessState.ConfidenceValid = sess.result.State.Estimate.ConfidenceValid
+		sessState.LastSample = sess.result.State.LastTelemetry
 	}
 	return sessState
 }

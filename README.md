@@ -88,7 +88,7 @@ All flags:
 - `--workload-type` (profile namespace key for `control` resume and `calibrate` persistence)
 - `--control-log`, `--telemetry-log`, `--throughput-floor-ratio`, `--output` (report mode)
 - `--telemetry-log`, `--control-log`, `--initial-baseline-throughput`, `--event-log`, `--output` (simulate mode)
-- `--session-id`, `--all`, `--output` (observe mode)
+  - `--session-id`, `--all`, `--telemetry`, `--output` (observe mode)
 
 ### JSON config
 

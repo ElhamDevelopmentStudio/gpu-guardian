@@ -443,6 +443,96 @@ func TestObserveCommandReadsSessionJSON(t *testing.T) {
 	}
 }
 
+func TestObserveCommandReadsTelemetryJSON(t *testing.T) {
+	orig := daemonBaseURL
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/health":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok","version":"v1"}`))
+		case "/v1/sessions/default/telemetry":
+			w.WriteHeader(http.StatusOK)
+			payload, _ := json.Marshal(map[string]interface{}{
+				"session_id": "default",
+				"session": map[string]interface{}{
+					"id":               "default",
+					"running":          true,
+					"policy_version":   daemon.APIPolicyVersion,
+					"confidence":       0.86,
+					"confidence_valid": true,
+					"mode":             "stateful",
+					"goal":             "run",
+					"last_action": map[string]interface{}{
+						"type":        "increase",
+						"concurrency": 4,
+						"reason":      "initial",
+					},
+				},
+				"telemetry": map[string]interface{}{
+					"temp_c":         71,
+					"temp_valid":     true,
+					"util_pct":       42,
+					"util_valid":     true,
+					"gpu_uuid":       "GPU-123",
+					"gpu_uuid_valid": true,
+				},
+			})
+			_, _ = w.Write(payload)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+	daemonBaseURL = ts.URL
+	defer func() { daemonBaseURL = orig }()
+
+	tmpDir := t.TempDir()
+	out := filepath.Join(tmpDir, "observe-telemetry.json")
+	if err := runObserve([]string{"--session-id", "default", "--telemetry", "--output", out}); err != nil {
+		t.Fatalf("observe telemetry command failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("expected observe output at %s: %v", out, err)
+	}
+
+	var got struct {
+		SessionID string `json:"session_id"`
+		Session   struct {
+			ID              string  `json:"id"`
+			PolicyVersion   string  `json:"policy_version"`
+			Confidence      float64 `json:"confidence"`
+			ConfidenceValid bool    `json:"confidence_valid"`
+			LastAction      struct {
+				Type string `json:"type"`
+			} `json:"last_action"`
+		} `json:"session"`
+	}
+
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode observe telemetry output: %v", err)
+	}
+	if got.SessionID != "default" {
+		t.Fatalf("expected session id default, got %q", got.SessionID)
+	}
+	if got.Session.ID != "default" {
+		t.Fatalf("expected nested session id default, got %q", got.Session.ID)
+	}
+	if got.Session.PolicyVersion != daemon.APIPolicyVersion {
+		t.Fatalf("expected policy version %q, got %q", daemon.APIPolicyVersion, got.Session.PolicyVersion)
+	}
+	if !got.Session.ConfidenceValid {
+		t.Fatalf("expected confidence validity true")
+	}
+	if got.Session.Confidence != 0.86 {
+		t.Fatalf("expected confidence 0.86, got %f", got.Session.Confidence)
+	}
+	if got.Session.LastAction.Type != "increase" {
+		t.Fatalf("expected last action type increase, got %q", got.Session.LastAction.Type)
+	}
+}
+
 func TestObserveCommandFailsWithoutDaemon(t *testing.T) {
 	orig := daemonBaseURL
 	daemonBaseURL = "http://127.0.0.1:0"

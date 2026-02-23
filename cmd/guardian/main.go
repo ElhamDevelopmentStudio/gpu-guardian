@@ -328,7 +328,7 @@ func printUsage() {
 	fmt.Println("  calibrate --cmd \"<command>\" [flags]")
 	fmt.Println("  report [flags]")
 	fmt.Println("  simulate --telemetry-log <path> [flags]")
-	fmt.Println("  observe [--session-id <id>|--all] [flags]")
+	fmt.Println("  observe [--session-id <id>|--all] [--telemetry] [flags]")
 }
 
 func runDaemon(args []string) error {
@@ -779,9 +779,13 @@ func runObserve(args []string) error {
 	fs := flag.NewFlagSet("observe", flag.ContinueOnError)
 	sessionID := fs.String("session-id", "default", "Session ID to fetch (default)")
 	allSessions := fs.Bool("all", false, "List all sessions instead of a single session")
+	telemetry := fs.Bool("telemetry", false, "Fetch latest telemetry for the selected session")
 	outputPath := fs.String("output", "", "Write observe output JSON to this path")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *allSessions && *telemetry {
+		return fmt.Errorf("--all and --telemetry are incompatible")
 	}
 
 	if _, err := fetchDaemonHealth(); err != nil {
@@ -811,6 +815,38 @@ func runObserve(args []string) error {
 		_ = resp.Body.Close()
 
 		payload, err := json.MarshalIndent(sessions, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode observe output: %w", err)
+		}
+		if strings.TrimSpace(*outputPath) != "" {
+			return os.WriteFile(*outputPath, payload, 0o600)
+		}
+		fmt.Println(string(payload))
+		return nil
+	}
+
+	if *telemetry {
+		req, err := http.NewRequest(http.MethodGet, daemonBaseURL+"/v1/sessions/"+*sessionID+"/telemetry", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			return fmt.Errorf("observe telemetry failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var telemetryResp daemon.TelemetryResponse
+		if err := json.NewDecoder(resp.Body).Decode(&telemetryResp); err != nil {
+			_ = resp.Body.Close()
+			return fmt.Errorf("decode telemetry response: %w", err)
+		}
+		_ = resp.Body.Close()
+
+		payload, err := json.MarshalIndent(telemetryResp, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encode observe output: %w", err)
 		}
