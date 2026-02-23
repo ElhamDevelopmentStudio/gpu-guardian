@@ -1,0 +1,68 @@
+package adapter
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestXttsAdapterStartRestartStop(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "workload.log")
+	cfg := Config{
+		OutputPath:  outputPath,
+		StopTimeout: 500 * time.Millisecond,
+		EchoOutput:  false,
+	}
+	adapter := NewXttsAdapter(cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := "sh -lc 'i=0; while true; do echo cycle-$i; i=$((i+1)); sleep 0.1; done'"
+	if err := adapter.Start(ctx, cmd, 4); err != nil {
+		t.Fatalf("failed to start adapter: %v", err)
+	}
+	if !adapter.IsRunning() {
+		t.Fatal("adapter should be running after start")
+	}
+	firstPID := adapter.GetPID()
+	if firstPID == 0 {
+		t.Fatal("expected process id to be set")
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	if adapter.OutputBytes() == 0 {
+		t.Fatal("expected adapter output bytes to increase")
+	}
+
+	if err := adapter.Restart(ctx, 2); err != nil {
+		t.Fatalf("failed to restart adapter: %v", err)
+	}
+	if !adapter.IsRunning() {
+		t.Fatal("adapter should be running after restart")
+	}
+	secondPID := adapter.GetPID()
+	if secondPID == 0 || secondPID == firstPID {
+		t.Fatalf("expected new process pid after restart, got first=%d second=%d", firstPID, secondPID)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	if err := adapter.Stop(); err != nil {
+		t.Fatalf("failed to stop adapter: %v", err)
+	}
+	if adapter.IsRunning() {
+		t.Fatalf("adapter should not be running after stop")
+	}
+
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("failed to read workload output log: %v", err)
+	}
+	if !strings.Contains(string(content), "cycle-") {
+		t.Fatal("workload output missing expected marker")
+	}
+}
