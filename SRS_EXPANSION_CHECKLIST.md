@@ -246,11 +246,22 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
       - `npm/test/client.test.js` (auth header flow when env token is set).
       - `python/tests/test_client.py` (auth header flow when env token is set).
     - `README.md` documents daemon auth defaults and `--auth-token` / `GUARDIAN_DAEMON_API_TOKEN` behavior.
-5. **[ ] Portability + build/delivery (Section 8.5, DIST-1..4)**
+5. **[x] Portability + build/delivery (Section 8.5, DIST-1..4)**
   - Linux-first support with optional Windows later.
   - Multi-arch/multi-platform binaries produced by CI.
   - No runtime Go dependency for artifacts.
   - Semantic versioning and release automation.
+  - Completed:
+    - Added GitHub Actions CI workflow (`.github/workflows/ci.yml`) with:
+      - Unit, integration, e2e, and regression test execution.
+      - Matrix builds for `linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, and `windows/amd64`.
+      - Static binaries via `CGO_ENABLED=0`.
+      - Artifact uploads per target.
+    - Added tag-triggered release workflow (`.github/workflows/release.yml`) that:
+      - Builds all CI targets as release assets.
+      - Creates `.tar.gz` or `.zip` archives for artifacts.
+      - Emits `dist/checksums.txt` with SHA-256 checksums.
+      - Publishes artifacts on `v*` tags (or manual dispatch) via `softprops/action-gh-release`.
 6. **[ ] Success criteria gates (Section 11)**
   - No sustained 4–5× slowdown.
   - ≥ 95% runtime above throughput floor.

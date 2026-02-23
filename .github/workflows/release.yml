@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish tagged release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+      - name: Build all platform artifacts
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          echo "Generating artifacts in dist/"
+          > dist/checksums.txt
+
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "darwin amd64"
+            "darwin arm64"
+            "windows amd64"
+          )
+
+          for target in "${targets[@]}"; do
+            set -- ${target}
+            GOOS=$1
+            GOARCH=$2
+            extension=""
+            archive=""
+            if [ "${GOOS}" = "windows" ]; then
+              extension=".exe"
+              binary="guardian-${GOOS}-${GOARCH}${extension}"
+              archive="guardian-${GOOS}-${GOARCH}.zip"
+            else
+              binary="guardian-${GOOS}-${GOARCH}"
+              archive="guardian-${GOOS}-${GOARCH}.tar.gz"
+            fi
+            output="dist/${binary}"
+            GOOS=${GOOS} GOARCH=${GOARCH} go build -trimpath -ldflags "-s -w" -o "${output}" ./cmd/guardian
+            if [ "${GOOS}" = "windows" ]; then
+              (cd dist && zip -9 "${archive}" "${binary}")
+            else
+              tar -czf "dist/${archive}" -C dist "${binary}"
+            fi
+            (cd dist && sha256sum "${binary}" >> checksums.txt)
+          done
+
+          echo "Artifacts:"
+          ls -la dist/
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
