@@ -319,16 +319,19 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 		estThrottleRisk = state.Estimate.ThrottleRiskScore
 		estThrottleRiskValid = true
 	}
+
+	if memPressureValid && memPressure >= 1.0 {
+		return actionPause(
+			"vram ceiling exceeded",
+			formatSignal("memory_pressure", memPressure, 1.0),
+		)
+	}
 	if tempValid {
 		if float64(temp) >= c.HardTemp {
-			action = actionDecrease(
-				state.CurrentConcurrency,
-				c.MaxConcurrencyStep,
-				"temperature at hard limit",
+			return actionPause(
+				"hard temperature limit exceeded",
 				formatSignal("hard_temp_limit", float64(temp), c.HardTemp),
 			)
-			action.CooldownSec = 2
-			return action
 		}
 
 		if prevTempValid && temp >= int(c.SoftTemp) && temp > prevTemp {

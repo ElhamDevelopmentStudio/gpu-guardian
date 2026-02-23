@@ -23,7 +23,8 @@ func newSample(ts time.Time, temp int, tempValid bool, throughputValue float64, 
 		}
 }
 
-func TestRuleController_DecreaseOnHardTemp(t *testing.T) {
+func TestRuleController_PausesOnHardTemp(t *testing.T) {
+	// Hard limit must trigger immediate pause to enforce safety invariants.
 	c := NewRuleController(RuleConfig{
 		SoftTemp:                 78,
 		HardTemp:                 84,
@@ -40,8 +41,36 @@ func TestRuleController_DecreaseOnHardTemp(t *testing.T) {
 		MaxConcurrency:     8,
 	}
 	action := c.Decide([]telemetry.TelemetrySample{telemetrySample}, []throughput.Sample{throughputSample}, state)
-	if action.Type != ActionDecrease {
-		t.Fatalf("expected decrease on hard temp, got %s", action.Type)
+	if action.Type != ActionPause {
+		t.Fatalf("expected pause on hard temp, got %s", action.Type)
+	}
+	if action.Reason != "hard temperature limit exceeded" {
+		t.Fatalf("expected hard temperature pause reason, got %q", action.Reason)
+	}
+}
+
+func TestRuleController_PausesOnHardVramCeiling(t *testing.T) {
+	c := NewRuleController(RuleConfig{
+		SoftTemp:             78,
+		HardTemp:             84,
+		TempHysteresisC:      2,
+		ThroughputFloorRatio: 0.7,
+		ThroughputWindowSec:  30,
+		ThroughputFloorSec:   30,
+		ThroughputRecoveryMargin: 0.05,
+	})
+	telemetrySample, throughputSample := newSample(time.Now(), 60, true, 100, 1.05, 0)
+	state := State{
+		CurrentConcurrency: 4,
+		MinConcurrency:     1,
+		MaxConcurrency:     8,
+	}
+	action := c.Decide([]telemetry.TelemetrySample{telemetrySample}, []throughput.Sample{throughputSample}, state)
+	if action.Type != ActionPause {
+		t.Fatalf("expected pause on vram ceiling breach, got %s", action.Type)
+	}
+	if action.Reason != "vram ceiling exceeded" {
+		t.Fatalf("expected vram ceiling pause reason, got %q", action.Reason)
 	}
 }
 
@@ -447,7 +476,7 @@ func TestRuleController_UsesEstimateRiskAndTrendSignals(t *testing.T) {
 	}
 }
 
-func TestRuleController_ExplainabilitySignalsForHardTempDecrease(t *testing.T) {
+func TestRuleController_ExplainabilitySignalsForHardTempPause(t *testing.T) {
 	now := time.Now()
 	c := NewRuleController(RuleConfig{
 		SoftTemp:                 78,
@@ -471,8 +500,8 @@ func TestRuleController_ExplainabilitySignalsForHardTempDecrease(t *testing.T) {
 		MaxConcurrency:     8,
 	}
 	action := c.Decide(telemetrySamples, throughSamples, state)
-	if action.Type != ActionDecrease {
-		t.Fatalf("expected decrease action, got %s", action.Type)
+	if action.Type != ActionPause {
+		t.Fatalf("expected pause action, got %s", action.Type)
 	}
 	if action.Reason == "" {
 		t.Fatalf("expected action reason for hard temp decision")

@@ -219,9 +219,13 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
     - Added daemon recovery integration coverage in `internal/daemon/daemon_test.go`:
       - `TestSessionRecoversFromTransientFailureAndContinues`
     - Strengthened stop semantics in `internal/daemon/daemon.go` (`stopSession`) so `/v1/sessions/{id}/stop` transitions `running` false immediately and avoids recovery-stalled active states.
-3. **[ ] Safety (NFR-8.3)**
+3. **[x] Safety (NFR-8.3)**
   - Enforce hard temperature ceiling and VRAM ceiling in regulator.
-  - Add hard-stop invariants and assertion checks.
+  - Completed:
+    - `internal/control/controller.go` now hard-pauses on hard-temperature breaches (`hard_temp_limit`) and VRAM ceiling breaches (`memory_pressure >= 1.0`) to enforce hard-stop invariants.
+    - Updated `internal/control/controller_test.go`:
+      - `TestRuleController_DecreaseOnHardTemp` now asserts pause-on-hard-temp behavior.
+      - `TestRuleController_PausesOnHardVramCeiling` added for hard memory enforcement.
 4. **[ ] Security + privacy (NFR-8.4)**
   - Keep local-only defaults.
   - No outbound telemetry by default.
