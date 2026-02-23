@@ -446,3 +446,76 @@ func TestRuleController_UsesEstimateRiskAndTrendSignals(t *testing.T) {
 		t.Fatalf("expected decrease based on estimated thermal/risk/trend signals, got %s", action.Type)
 	}
 }
+
+func TestRuleController_ExplainabilitySignalsForHardTempDecrease(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		SoftTemp:                 78,
+		HardTemp:                 84,
+		TempHysteresisC:          2,
+		ThroughputFloorRatio:     0.7,
+		ThroughputWindowSec:      30,
+		ThroughputFloorSec:       30,
+		ThroughputRecoveryMargin: 0.05,
+	})
+
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 84, TempValid: true},
+	}
+	throughSamples := []throughput.Sample{
+		{Timestamp: now, Throughput: 10},
+	}
+	state := State{
+		CurrentConcurrency: 4,
+		MinConcurrency:     1,
+		MaxConcurrency:     8,
+	}
+	action := c.Decide(telemetrySamples, throughSamples, state)
+	if action.Type != ActionDecrease {
+		t.Fatalf("expected decrease action, got %s", action.Type)
+	}
+	if action.Reason == "" {
+		t.Fatalf("expected action reason for hard temp decision")
+	}
+	if len(action.Signals) == 0 {
+		t.Fatalf("expected action signals for hard temp decision")
+	}
+}
+
+func TestRuleController_ExplainabilitySignalsForConfidenceHold(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		SoftTemp:                 78,
+		HardTemp:                 84,
+		EstimateConfidenceMin:    0.5,
+		ThroughputFloorRatio:     0.7,
+		ThroughputWindowSec:      30,
+		ThroughputFloorSec:       30,
+		ThroughputRecoveryMargin: 0.05,
+	})
+
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 70, TempValid: true},
+	}
+	throughSamples := []throughput.Sample{
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 10},
+		{Timestamp: now, Throughput: 10},
+	}
+	state := State{
+		CurrentConcurrency: 4,
+		MinConcurrency:     1,
+		MaxConcurrency:     8,
+		BaselineThroughput: 12,
+		Estimate: StateEstimate{
+			Confidence:      0.2,
+			ConfidenceValid: true,
+		},
+	}
+	action := c.Decide(telemetrySamples, throughSamples, state)
+	if action.Type != ActionHold {
+		t.Fatalf("expected hold action on low confidence, got %s", action.Type)
+	}
+	if action.Reason != "estimate confidence below configured threshold" {
+		t.Fatalf("unexpected reason %q", action.Reason)
+	}
+}

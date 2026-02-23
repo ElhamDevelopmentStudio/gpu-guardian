@@ -135,6 +135,8 @@ State estimation fields are now included in run state and logs (`engine_tick`):
 - `throttle_risk_score`
 - `stability_index`
 - `estimate_confidence`
+- `action_reason`
+- `action_signals` (explainability inputs that triggered the decision)
 
 ## Tests
 

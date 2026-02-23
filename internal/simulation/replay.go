@@ -21,8 +21,8 @@ const defaultReplayPollInterval = 2 * time.Second
 const maxTelemetryWindowSamples = 300
 
 type ReplayConfig struct {
-	TelemetryLogPath           string
-	ControlLogPath             string
+	TelemetryLogPath          string
+	ControlLogPath            string
 	MinConcurrency            int
 	MaxConcurrency            int
 	StartConcurrency          int
@@ -38,17 +38,17 @@ type ReplayConfig struct {
 }
 
 type ReplayResult struct {
-	Ticks             int           `json:"ticks"`
-	TelemetrySamples  int           `json:"telemetry_samples"`
-	DecisionSamples   int           `json:"decision_samples"`
-	StartConcurrency  int           `json:"start_concurrency"`
-	FinalConcurrency  int           `json:"final_concurrency"`
-	FinalAction       string        `json:"final_action"`
-	FinalReason       string        `json:"final_reason"`
-	StartedAt         string        `json:"started_at"`
-	CompletedAt       string        `json:"completed_at"`
-	ThroughputSamples int           `json:"throughput_samples_used"`
-	EventLogPath      string        `json:"event_log_path,omitempty"`
+	Ticks             int    `json:"ticks"`
+	TelemetrySamples  int    `json:"telemetry_samples"`
+	DecisionSamples   int    `json:"decision_samples"`
+	StartConcurrency  int    `json:"start_concurrency"`
+	FinalConcurrency  int    `json:"final_concurrency"`
+	FinalAction       string `json:"final_action"`
+	FinalReason       string `json:"final_reason"`
+	StartedAt         string `json:"started_at"`
+	CompletedAt       string `json:"completed_at"`
+	ThroughputSamples int    `json:"throughput_samples_used"`
+	EventLogPath      string `json:"event_log_path,omitempty"`
 }
 
 type throughputSamplePoint struct {
@@ -65,17 +65,18 @@ type controlLogEvent struct {
 }
 
 type replayTickEvent struct {
-	Event             string  `json:"event"`
-	Timestamp         string  `json:"timestamp"`
-	Action            string  `json:"action"`
-	ActionReason      string  `json:"action_reason"`
-	Concurrency       int     `json:"concurrency"`
-	TargetConcurrency int     `json:"target_concurrency"`
-	TempC             int     `json:"temp_c"`
-	TempValid         bool    `json:"temp_valid"`
-	ThroughputBps     float64 `json:"throughput_bps"`
-	BaselineBps       float64 `json:"baseline_bps"`
-	ThroughputRatio   float64 `json:"throughput_ratio"`
+	Event             string   `json:"event"`
+	Timestamp         string   `json:"timestamp"`
+	Action            string   `json:"action"`
+	ActionReason      string   `json:"action_reason"`
+	ActionSignals     []string `json:"action_signals,omitempty"`
+	Concurrency       int      `json:"concurrency"`
+	TargetConcurrency int      `json:"target_concurrency"`
+	TempC             int      `json:"temp_c"`
+	TempValid         bool     `json:"temp_valid"`
+	ThroughputBps     float64  `json:"throughput_bps"`
+	BaselineBps       float64  `json:"baseline_bps"`
+	ThroughputRatio   float64  `json:"throughput_ratio"`
 }
 
 func Replay(cfg ReplayConfig) (ReplayResult, error) {
@@ -130,12 +131,12 @@ func Replay(cfg ReplayConfig) (ReplayResult, error) {
 
 	startedAt := time.Now().UTC()
 	result := ReplayResult{
-		Ticks:            0,
-		TelemetrySamples: len(telemetrySamples),
-		StartConcurrency: cfg.StartConcurrency,
+		Ticks:             0,
+		TelemetrySamples:  len(telemetrySamples),
+		StartConcurrency:  cfg.StartConcurrency,
 		ThroughputSamples: len(controlThroughput),
-		StartedAt:        startedAt.Format(time.RFC3339),
-		EventLogPath:     cfg.EventLogPath,
+		StartedAt:         startedAt.Format(time.RFC3339),
+		EventLogPath:      cfg.EventLogPath,
 	}
 
 	state := control.State{
@@ -229,6 +230,7 @@ func Replay(cfg ReplayConfig) (ReplayResult, error) {
 			Timestamp:         now.Format(time.RFC3339),
 			Action:            string(action.Type),
 			ActionReason:      action.Reason,
+			ActionSignals:     action.Signals,
 			Concurrency:       currentConcurrency,
 			TargetConcurrency: action.Concurrency,
 			TempC:             sample.TempC,
@@ -518,4 +520,4 @@ func clampInt(v, min, max int) int {
 type nopWriteCloser struct{}
 
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
-func (nopWriteCloser) Close() error                  { return nil }
+func (nopWriteCloser) Close() error                { return nil }

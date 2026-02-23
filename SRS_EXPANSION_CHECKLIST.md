@@ -172,8 +172,10 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
 2. **[x] DR-2/4 + CLI consistency (session and telemetry status contract)**
    - Return aligned field names across CLI and API responses (state, policy version, last action, confidence).
 
-3. **[ ] FR-20 + FR-21 UX hooks (operator visibility)**
-   - Add explainability in outputs: why action was taken and what signal triggered it.
+3. **[x] FR-20 + FR-21 UX hooks (operator visibility)**
+   - Added explainability to action outputs via `action_signals` and richer `action_reason` values in control decisions.
+   - Engine log entries now include `action_signals` to make decision basis inspectable in `engine_tick`.
+   - Simulation replay event logs include action reason/signals for offline what-if analysis.
 
 ## P4 — Cross-ecosystem distribution and clients
 

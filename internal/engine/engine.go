@@ -451,6 +451,7 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 				"pid":                       state.ProcessPID,
 				"action":                    string(action.Type),
 				"action_reason":             action.Reason,
+				"action_signals":            action.Signals,
 				"concurrency":               state.CurrentConcurrency,
 				"target_concurrency":        action.Concurrency,
 				"temp_c":                    ts.TempC,

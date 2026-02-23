@@ -1,6 +1,7 @@
 package control
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/elhamdev/gpu-guardian/internal/telemetry"
@@ -20,6 +21,7 @@ type Action struct {
 	Type            ActionType `json:"type"`
 	Concurrency     int        `json:"concurrency"`
 	Reason          string     `json:"reason"`
+	Signals         []string   `json:"signals,omitempty"`
 	CooldownSec     float64    `json:"cooldown_sec,omitempty"`
 	ConcurrencyStep int        `json:"concurrency_step,omitempty"`
 	BatchSize       int        `json:"batch_size,omitempty"`
@@ -256,7 +258,11 @@ func throughputBelowThreshold(samples []throughput.Sample, now time.Time, thresh
 	return true
 }
 
-func actionDecrease(current int, step int, reason string) Action {
+func formatSignal(metric string, value float64, threshold float64) string {
+	return fmt.Sprintf("%s %.2f >= %.2f", metric, value, threshold)
+}
+
+func actionDecrease(current int, step int, reason string, signals ...string) Action {
 	if step < 1 {
 		step = 1
 	}
@@ -264,11 +270,12 @@ func actionDecrease(current int, step int, reason string) Action {
 		Type:        ActionDecrease,
 		Concurrency: current - step,
 		Reason:      reason,
+		Signals:     append([]string(nil), signals...),
 		CooldownSec: 0,
 	}
 }
 
-func actionIncrease(current int, step int, reason string) Action {
+func actionIncrease(current int, step int, reason string, signals ...string) Action {
 	if step < 1 {
 		step = 1
 	}
@@ -276,14 +283,16 @@ func actionIncrease(current int, step int, reason string) Action {
 		Type:        ActionIncrease,
 		Concurrency: current + step,
 		Reason:      reason,
+		Signals:     append([]string(nil), signals...),
 		CooldownSec: 0,
 	}
 }
 
-func actionPause(reason string) Action {
+func actionPause(reason string, signals ...string) Action {
 	return Action{
 		Type:        ActionPause,
 		Reason:      reason,
+		Signals:     append([]string(nil), signals...),
 		CooldownSec: 0,
 		Concurrency: 0,
 	}
@@ -312,36 +321,66 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 	}
 	if tempValid {
 		if float64(temp) >= c.HardTemp {
-			action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "temperature at hard limit")
+			action = actionDecrease(
+				state.CurrentConcurrency,
+				c.MaxConcurrencyStep,
+				"temperature at hard limit",
+				formatSignal("hard_temp_limit", float64(temp), c.HardTemp),
+			)
 			action.CooldownSec = 2
 			return action
 		}
 
 		if prevTempValid && temp >= int(c.SoftTemp) && temp > prevTemp {
-			action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "temperature rising at/above soft limit")
+			action = actionDecrease(
+				state.CurrentConcurrency,
+				c.MaxConcurrencyStep,
+				"temperature rising at/above soft limit",
+				formatSignal("temp_rise", float64(temp), c.SoftTemp),
+			)
 			action.CooldownSec = 1
 			return action
 		}
 	}
 
 	if memPressureValid && memPressure >= c.MemoryPressureLimit {
-		action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "memory pressure near saturation")
+		action = actionDecrease(
+			state.CurrentConcurrency,
+			c.MaxConcurrencyStep,
+			"memory pressure near saturation",
+			formatSignal("memory_pressure", memPressure, c.MemoryPressureLimit),
+		)
 		action.CooldownSec = 1.5
 		return action
 	}
 	if state.Estimate.TempSlopeValid && state.Estimate.TempSlopeCPerSec >= c.MaxTempSlopeCPerSec {
-		action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "temperature rising too fast")
+		action = actionDecrease(
+			state.CurrentConcurrency,
+			c.MaxConcurrencyStep,
+			"temperature rising too fast",
+			formatSignal("temp_slope_c_per_sec", state.Estimate.TempSlopeCPerSec, c.MaxTempSlopeCPerSec),
+		)
 		action.CooldownSec = 1.5
 		return action
 	}
 
 	if estThrottleRiskValid && estThrottleRisk >= c.ThrottleRiskLimit {
-		action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throttle risk elevated")
+		action = actionDecrease(
+			state.CurrentConcurrency,
+			c.MaxConcurrencyStep,
+			"throttle risk elevated",
+			formatSignal("throttle_risk", estThrottleRisk, c.ThrottleRiskLimit),
+		)
 		action.CooldownSec = 1.5
 		return action
 	}
 	if state.Estimate.ThroughputTrendValid && state.Estimate.ThroughputTrend < c.ThroughputTrendDropLimit {
-		action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throughput trend dropped")
+		action = actionDecrease(
+			state.CurrentConcurrency,
+			c.MaxConcurrencyStep,
+			"throughput trend dropped",
+			formatSignal("throughput_trend", state.Estimate.ThroughputTrend, c.ThroughputTrendDropLimit),
+		)
 		action.CooldownSec = 1.25
 		return action
 	}
@@ -357,21 +396,30 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 			c.throughputRecoveryAttempts++
 			if c.throughputRecoveryAttempts > c.ThroughputRecoveryMaxAttempts {
 				c.throughputRecoveryAttempts = c.ThroughputRecoveryMaxAttempts
-				return actionPause("throughput recovery attempts exceeded, pausing to preserve state")
+				return actionPause(
+					"throughput recovery attempts exceeded, pausing to preserve state",
+					"throughput_floor_recovery",
+				)
 			}
 
 			action.CooldownSec = 1.5
 			if belowSlowdown {
 				step := c.MaxConcurrencyStep * c.ThroughputRecoveryStepMultiplier
-				return actionDecrease(state.CurrentConcurrency, step, "throughput below slowdown fallback, aggressive recovery")
+				return actionDecrease(
+					state.CurrentConcurrency,
+					step,
+					"throughput below slowdown fallback, aggressive recovery",
+					"throughput_below_slowdown_fallback",
+				)
 			}
-			return actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throughput below floor sustained")
+			return actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throughput below floor sustained", "throughput_below_floor")
 		}
 
 		c.throughputRecoveryAttempts = 0
 	}
 
 	if !tempValid {
+		action.Reason = "telemetry missing temp, no safe directional action"
 		return action
 	}
 
@@ -381,7 +429,12 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 	}
 
 	if c.shouldIncrease(state, avgTp, temp, memPressure, estThrottleRisk, state.Estimate) {
-		action = actionIncrease(state.CurrentConcurrency, 1, "temperature and throughput stable")
+		action = actionIncrease(
+			state.CurrentConcurrency,
+			1,
+			"temperature and throughput stable",
+			"all_guardrails_clear",
+		)
 		return action
 	}
 
