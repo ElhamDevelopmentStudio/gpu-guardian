@@ -27,14 +27,15 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
    - Implement stable XTTS adapter that satisfies v1 of this interface.
    - Deliverable: interface version tag and adapter compatibility checks.
 
-3. **[ ] DR-1 + DR-2 + DR-3 + DR-4 + DR-5 + CLI-1 + CLI-3 (Daemon/API + versioning + CLI route selection)**
+3. **[x] DR-1 + DR-2 + DR-3 + DR-4 + DR-5 + CLI-1 + CLI-3 (Daemon/API + versioning + CLI route selection)**
    - Local daemon process with versioned API namespace.
    - Endpoints at minimum: health, metrics, start/stop/control, session/telemetry/query.
    - Default localhost binding.
    - CLI automatically uses daemon when available; falls back to standalone mode only if daemon unavailable.
    - Deliverable: service contract with compatibility guarantees inside one major version line.
 
-4. **[ ] FR-2 (Session/state modes + FR-19 recovery-safe lifecycle)**
+4. **[x] FR-2 (Session/state modes + FR-19 recovery-safe lifecycle)** *(done)*
+   - Implemented: `internal/daemon/daemon.go` now maintains explicit session state (`mode`, `goal`, `retries`, `errors`, `last_action`, `last_sample`), supports `stateless`/`stateful` modes, persists state checkpoints to `checkpoint_path`, and performs pause/safe-stop after configured recovery failures.
    - Add explicit session model (`state`, `goal`, `last_action`, `last_sample`, `retries`, `errors`, checkpoints).
    - Include stateless/ephemeral mode and persisted session/profile mode.
    - Implement pause/safe-stop behavior when recovery fails by policy.

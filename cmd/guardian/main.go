@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/elhamdev/gpu-guardian/internal/adapter"
 	"github.com/elhamdev/gpu-guardian/internal/control"
+	"github.com/elhamdev/gpu-guardian/internal/daemon"
 	"github.com/elhamdev/gpu-guardian/internal/engine"
 	"github.com/elhamdev/gpu-guardian/internal/logger"
 	"github.com/elhamdev/gpu-guardian/internal/telemetry"
@@ -20,6 +23,8 @@ import (
 )
 
 const mvpConfigPath = ".guardian-mvp.json"
+
+var daemonBaseURL = "http://" + daemon.DefaultListenAddress
 
 type Config struct {
 	Command                  string  `json:"command"`
@@ -146,21 +151,52 @@ func normalizeConfig(cfg *Config) error {
 }
 
 func main() {
-	args := os.Args
-	if len(args) < 2 || args[1] != "control" {
-		fmt.Println("Usage: guardian control --cmd \"<command>\" [flags]")
-		fmt.Println("Use --help on the control command for more details.")
+	if len(os.Args) < 2 {
+		printUsage()
 		os.Exit(1)
 	}
 
-	configPath := detectConfigPath(args[2:])
+	switch os.Args[1] {
+	case "daemon":
+		if err := runDaemon(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "daemon failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "control":
+		if err := runControl(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "control failed: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Println("Usage: guardian <command>")
+	fmt.Println("  daemon  [--listen=<addr>]")
+	fmt.Println("  control --cmd \"<command>\" [flags]")
+}
+
+func runDaemon(args []string) error {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	listen := fs.String("listen", daemon.DefaultListenAddress, "Daemon listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	server := daemon.NewServer(*listen)
+	return server.Serve()
+}
+
+func runControl(args []string) error {
+	configPath := detectConfigPath(args)
 	cfg, err := loadConfigFile(configPath)
 	if err != nil && !os.IsNotExist(err) {
-		fmt.Printf("failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	fs := flag.NewFlagSet("control", flag.ExitOnError)
+	fs := flag.NewFlagSet("control", flag.ContinueOnError)
 	cmd := fs.String("cmd", cfg.Command, "Command to run, for example: python generate_xtts.py")
 	_ = fs.String("config", configPath, "Optional JSON config path")
 	poll := fs.Int("poll-interval-sec", cfg.PollIntervalSec, "Telemetry polling interval in seconds")
@@ -181,11 +217,9 @@ func main() {
 	echoOutput := fs.Bool("echo-workload-output", cfg.EchoWorkloadOutput, "Echo workload output to console")
 	maxTicks := fs.Int("max-ticks", 0, "Internal limit for control loop iterations (0 means unlimited)")
 
-	if err := fs.Parse(args[2:]); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
-
 	cfg.Command = strings.TrimSpace(*cmd)
 	cfg.PollIntervalSec = *poll
 	cfg.SoftTemp = *softTemp
@@ -206,27 +240,8 @@ func main() {
 	cfg.MaxTicks = *maxTicks
 
 	if err := normalizeConfig(&cfg); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-
-	log, err := logger.New(cfg.LogPath, int64(cfg.LogMaxSizeMB)*1024*1024, true)
-	if err != nil {
-		fmt.Printf("failed to initialize logger: %v\n", err)
-		os.Exit(1)
-	}
-	defer log.Close()
-
-	log.Info("starting control loop", map[string]interface{}{
-		"config_path":  configPath,
-		"command":      cfg.Command,
-		"poll_seconds": cfg.PollIntervalSec,
-		"min":          cfg.MinConcurrency,
-		"max":          cfg.MaxConcurrency,
-		"start":        cfg.StartConcurrency,
-		"soft_temp":    cfg.SoftTemp,
-		"hard_temp":    cfg.HardTemp,
-	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sigCh := make(chan os.Signal, 1)
@@ -235,7 +250,38 @@ func main() {
 		<-sigCh
 		cancel()
 	}()
-	defer cancel()
+	defer func() {
+		signal.Stop(sigCh)
+		cancel()
+	}()
+
+	delegated, err := startViaDaemonIfAvailable(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if delegated {
+		return nil
+	}
+
+	return runControlLocal(ctx, cfg)
+}
+
+func runControlLocal(ctx context.Context, cfg Config) error {
+	log, err := logger.New(cfg.LogPath, int64(cfg.LogMaxSizeMB)*1024*1024, true)
+	if err != nil {
+		return fmt.Errorf("failed to initialize logger: %w", err)
+	}
+	defer log.Close()
+
+	log.Info("starting control loop", map[string]interface{}{
+		"command":      cfg.Command,
+		"poll_seconds": cfg.PollIntervalSec,
+		"min":          cfg.MinConcurrency,
+		"max":          cfg.MaxConcurrency,
+		"start":        cfg.StartConcurrency,
+		"soft_temp":    cfg.SoftTemp,
+		"hard_temp":    cfg.HardTemp,
+	})
 
 	controlCfg := control.RuleConfig{
 		SoftTemp:             cfg.SoftTemp,
@@ -281,9 +327,124 @@ func main() {
 		log,
 	)
 	if _, err := eng.Start(ctx); err != nil {
-		log.Error("engine failed", map[string]interface{}{
-			"error": err.Error(),
-		})
-		os.Exit(1)
+		log.Error("engine failed", map[string]interface{}{"error": err.Error()})
+		return err
 	}
+	return nil
+}
+
+func startViaDaemonIfAvailable(ctx context.Context, cfg Config) (bool, error) {
+	health, err := fetchDaemonHealth()
+	if err != nil {
+		return false, nil
+	}
+	if health.Version != daemon.APIVersion {
+		return false, nil
+	}
+
+	sessionID, err := startDaemonSession(cfg)
+	if err != nil {
+		return false, err
+	}
+	return monitorDaemonSession(ctx, sessionID)
+}
+
+func startDaemonSession(cfg Config) (string, error) {
+	req := daemon.StartRequest{
+		Command:                  cfg.Command,
+		PollIntervalSec:          cfg.PollIntervalSec,
+		SoftTemp:                 cfg.SoftTemp,
+		HardTemp:                 cfg.HardTemp,
+		MinConcurrency:           cfg.MinConcurrency,
+		MaxConcurrency:           cfg.MaxConcurrency,
+		StartConcurrency:         cfg.StartConcurrency,
+		ThroughputFloorRatio:     cfg.ThroughputFloorRatio,
+		AdjustmentCooldownSec:    cfg.AdjustmentCooldownSec,
+		BaselineWindowSec:        cfg.BaselineWindowSec,
+		ThroughputWindowSec:      cfg.ThroughputWindowSec,
+		ThroughputFloorWindowSec: cfg.ThroughputFloorWindowSec,
+		AdapterStopTimeoutSec:    cfg.AdapterStopTimeoutSec,
+		LogPath:                  cfg.LogPath,
+		LogMaxSizeMB:             cfg.LogMaxSizeMB,
+		WorkloadLogPath:          cfg.WorkloadLogPath,
+		EchoWorkloadOutput:       cfg.EchoWorkloadOutput,
+		MaxTicks:                 cfg.MaxTicks,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize daemon start request: %w", err)
+	}
+
+	r, err := http.Post(daemonBaseURL+"/v1/sessions", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusAccepted {
+		b, _ := io.ReadAll(r.Body)
+		return "", fmt.Errorf("daemon start failed: %s", strings.TrimSpace(string(b)))
+	}
+	var startResp daemon.SessionResponse
+	if err := json.NewDecoder(r.Body).Decode(&startResp); err != nil {
+		return "", err
+	}
+	return startResp.SessionID, nil
+}
+
+func monitorDaemonSession(ctx context.Context, sessionID string) (bool, error) {
+	client := &http.Client{}
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/v1/sessions/%s/stop", daemonBaseURL, sessionID), nil)
+			resp, err := client.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+			return true, nil
+		case <-ticker.C:
+			req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/v1/sessions/%s", daemonBaseURL, sessionID), nil)
+			if err != nil {
+				return true, err
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return true, err
+			}
+			if resp.StatusCode != http.StatusOK {
+				_ = resp.Body.Close()
+				return true, fmt.Errorf("daemon session query failed: status=%d", resp.StatusCode)
+			}
+			var session daemon.SessionState
+			if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+				_ = resp.Body.Close()
+				return true, err
+			}
+			_ = resp.Body.Close()
+			if !session.Running {
+				return true, nil
+			}
+		}
+	}
+}
+
+func fetchDaemonHealth() (*daemon.HealthResponse, error) {
+	client := &http.Client{Timeout: 300 * time.Millisecond}
+	resp, err := client.Get(daemonBaseURL + "/v1/health")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("daemon health status %d", resp.StatusCode)
+	}
+	var out daemon.HealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

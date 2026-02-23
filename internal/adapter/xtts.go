@@ -38,6 +38,7 @@ type XTTSAdapter struct {
 	cancel      context.CancelFunc
 	concurrency int
 	cfg         Config
+	processDone chan error
 
 	writer      *countingWriter
 	outputFile  *os.File
@@ -135,6 +136,10 @@ func (a *XTTSAdapter) startLocked(ctx context.Context, cmd string, concurrency i
 	a.cancel = cancel
 	a.cmd = command
 	a.runningFile = true
+	a.processDone = make(chan error, 1)
+	go func() {
+		a.processDone <- a.cmd.Wait()
+	}()
 	a.writer.Reset()
 	a.command = cmd
 	a.concurrency = concurrency
@@ -217,7 +222,16 @@ func (a *XTTSAdapter) Restart(ctx context.Context, concurrency int) error {
 func (a *XTTSAdapter) stopLocked() error {
 	if a.cmd == nil || a.cmd.Process == nil {
 		a.cmd = nil
+		a.processDone = nil
 		a.cancel = nil
+		a.runningFile = false
+		return nil
+	}
+	if a.cmd.ProcessState != nil {
+		a.cmd = nil
+		a.processDone = nil
+		a.cancel = nil
+		a.runningFile = false
 		return nil
 	}
 	a.writer.Reset()
@@ -225,23 +239,29 @@ func (a *XTTSAdapter) stopLocked() error {
 		a.cancel()
 	}
 
+	done := a.processDone
+	if done == nil {
+		done = make(chan error, 1)
+		go func() {
+			done <- a.cmd.Wait()
+		}()
+		a.processDone = done
+	}
+
 	grace := a.cfg.StopTimeout
 	if grace <= 0 {
 		grace = 5 * time.Second
 	}
-	done := make(chan error, 1)
-	go func() {
-		done <- a.cmd.Wait()
-	}()
 	select {
 	case <-done:
 		// Process terminated.
 	case <-time.After(grace):
 		_ = a.cmd.Process.Signal(syscall.SIGKILL)
-		<-done
+		_ = <-done
 	}
 
 	a.cmd = nil
+	a.processDone = nil
 	a.cancel = nil
 	a.runningFile = false
 	return nil
@@ -267,6 +287,20 @@ func (a *XTTSAdapter) IsRunning() bool {
 	defer a.mu.Unlock()
 	if a.cmd == nil || a.cmd.Process == nil {
 		return false
+	}
+	if a.cmd.ProcessState != nil {
+		a.runningFile = false
+		a.processDone = nil
+		return false
+	}
+	if a.processDone != nil {
+		select {
+		case <-a.processDone:
+			a.processDone = nil
+			a.runningFile = false
+			return false
+		default:
+		}
 	}
 	return a.runningFile && a.cmd.ProcessState == nil
 }
