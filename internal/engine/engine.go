@@ -62,6 +62,7 @@ type RunState struct {
 	CurrentConcurrency int                       `json:"current_concurrency"`
 	LastAction         control.Action            `json:"last_action"`
 	LastActionAt       time.Time                 `json:"last_action_at"`
+	LastTelemetryAt    time.Time                 `json:"last_telemetry_at"`
 	LastTelemetry      telemetry.TelemetrySample `json:"last_telemetry"`
 	LastThroughput     throughput.Sample         `json:"last_throughput"`
 	BaselineThroughput float64                   `json:"baseline_throughput"`
