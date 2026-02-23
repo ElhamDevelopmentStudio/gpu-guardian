@@ -65,7 +65,7 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
      - `internal/engine/engine_test.go` (engine writes telemetry samples to configured sample log)
      - `cmd/guardian/main_test.go` integration assertion for telemetry log generation
 
-2. **[ ] FR-6 + FR-7 (Derived state estimation)**
+2. **[x] FR-6 + FR-7 (Derived state estimation)**
    - ✅ Added `internal/control.StateEstimate` with dT/dt (`temp_slope_c_per_sec`), throughput trend (`throughput_trend`), throttle risk score (`throttle_risk_score`), stability index (`stability_index`), and confidence.
    - ✅ Added `control.StateEstimator` with EMA-style temporal smoothing for noise control.
    - ✅ Threaded estimates into run state (`RunState.Estimate`) and CLI/engine logging.
