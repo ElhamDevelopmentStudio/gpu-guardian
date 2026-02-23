@@ -1,0 +1,156 @@
+package engine
+
+import (
+	"context"
+	"sync"
+	"testing"
+
+	"github.com/elhamdev/gpu-guardian/internal/control"
+)
+
+func TestEngineLifecycleTransitionsWithImmediateShutdown(t *testing.T) {
+	adapter := &fakeAdapter{}
+	ctrl := control.NewRuleController(control.RuleConfig{})
+
+	e := New(
+		Config{
+			Command:               "python generate_xtts.py",
+			MinConcurrency:        1,
+			MaxConcurrency:        4,
+			StartConcurrency:      1,
+			AdjustmentCooldown:    0,
+			PollInterval:          0,
+			ThroughputFloorWindow: 0,
+			ThroughputWindow:      0,
+		},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	initial := e.Lifecycle()
+	if initial.Phase != LifecycleIdle {
+		t.Fatalf("expected initial lifecycle phase %s, got %s", LifecycleIdle, initial.Phase)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := e.Start(ctx)
+	if err != nil {
+		t.Fatalf("engine start with canceled context should not error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected engine result")
+	}
+	if result.Reason != "shutdown_requested" {
+		t.Fatalf("expected shutdown reason, got %q", result.Reason)
+	}
+	final := e.Lifecycle()
+	if final.Phase != LifecycleStopped {
+		t.Fatalf("expected final lifecycle phase %s, got %s", LifecycleStopped, final.Phase)
+	}
+}
+
+func TestEngineLifecycleInvalidConfig(t *testing.T) {
+	adapter := &fakeAdapter{}
+	ctrl := control.NewRuleController(control.RuleConfig{})
+
+	e := New(
+		Config{},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	_, err := e.Start(context.Background())
+	if err == nil {
+		t.Fatal("expected invalid config error")
+	}
+	if e.Lifecycle().Phase != LifecycleFailed {
+		t.Fatalf("expected lifecycle phase %s on invalid config, got %s", LifecycleFailed, e.Lifecycle().Phase)
+	}
+}
+
+type fakeAdapter struct {
+	mu      sync.Mutex
+	pid     int
+	running bool
+}
+
+func (a *fakeAdapter) Start(_ context.Context, _ string, _ int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.running = true
+	a.pid++
+	if a.pid == 0 {
+		a.pid = 1
+	}
+	return nil
+}
+
+func (a *fakeAdapter) Pause(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.running = false
+	return nil
+}
+
+func (a *fakeAdapter) Resume(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.running = true
+	return nil
+}
+
+func (a *fakeAdapter) UpdateParameters(context.Context, int) error {
+	return nil
+}
+
+func (a *fakeAdapter) GetThroughput() uint64 {
+	return 0
+}
+
+func (a *fakeAdapter) GetProgress() float64 {
+	return 0
+}
+
+func (a *fakeAdapter) Restart(context.Context, int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pid++
+	if a.pid == 0 {
+		a.pid = 1
+	}
+	a.running = true
+	return nil
+}
+
+func (a *fakeAdapter) Stop() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.running = false
+	return nil
+}
+
+func (a *fakeAdapter) GetPID() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.running {
+		return 0
+	}
+	return a.pid
+}
+
+func (a *fakeAdapter) IsRunning() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.running
+}
+
+func (a *fakeAdapter) OutputBytes() uint64 {
+	return 0
+}

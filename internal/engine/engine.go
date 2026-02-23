@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/elhamdev/gpu-guardian/internal/control"
@@ -74,6 +75,26 @@ type RunState struct {
 	ProcessPID         int                       `json:"process_pid"`
 }
 
+// LifecyclePhase captures explicit high-level engine execution state.
+type LifecyclePhase string
+
+const (
+	LifecycleIdle     LifecyclePhase = "idle"
+	LifecycleStarting LifecyclePhase = "starting"
+	LifecycleRunning  LifecyclePhase = "running"
+	LifecycleStopping LifecyclePhase = "stopping"
+	LifecycleStopped  LifecyclePhase = "stopped"
+	LifecycleFailed   LifecyclePhase = "failed"
+)
+
+// Lifecycle exposes explicit engine execution state for API/state reporting.
+type Lifecycle struct {
+	Phase     LifecyclePhase `json:"phase"`
+	Reason    string         `json:"reason,omitempty"`
+	Error     string         `json:"error,omitempty"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
 // EngineResult summarizes a completed run.
 type EngineResult struct {
 	State     RunState  `json:"state"`
@@ -90,6 +111,8 @@ type Engine struct {
 	telemetryCollector *telemetry.Collector
 	throughputTracker  *throughput.Tracker
 	nowFn              func() time.Time
+	lifecycleMu        sync.Mutex
+	lifecycle          Lifecycle
 }
 
 // New builds a canonical Engine instance.
@@ -121,7 +144,29 @@ func New(
 		telemetryCollector: telemetryCollector,
 		throughputTracker:  throughputTracker,
 		nowFn:              time.Now,
+		lifecycle:          Lifecycle{Phase: LifecycleIdle, UpdatedAt: time.Now()},
 	}
+}
+
+func (e *Engine) setLifecycle(phase LifecyclePhase, reason string, err error) {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+
+	e.lifecycle.Phase = phase
+	e.lifecycle.Reason = reason
+	if err != nil {
+		e.lifecycle.Error = err.Error()
+	} else {
+		e.lifecycle.Error = ""
+	}
+	e.lifecycle.UpdatedAt = e.nowFn()
+}
+
+// Lifecycle returns a snapshot of the current engine lifecycle state.
+func (e *Engine) Lifecycle() Lifecycle {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.lifecycle
 }
 
 func appendTelemetry(samples []telemetry.TelemetrySample, s telemetry.TelemetrySample) []telemetry.TelemetrySample {
@@ -199,7 +244,9 @@ func (e *Engine) ensureConfig() error {
 
 // Start launches the workload and executes the control loop.
 func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
+	e.setLifecycle(LifecycleStarting, "starting", nil)
 	if err := e.ensureConfig(); err != nil {
+		e.setLifecycle(LifecycleFailed, "invalid_config", err)
 		return nil, err
 	}
 
@@ -220,8 +267,10 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 
 	if err := e.adapter.Start(ctx, e.cfg.Command, state.CurrentConcurrency); err != nil {
 		e.logger.Error("failed to start workload", map[string]interface{}{"error": err.Error()})
+		e.setLifecycle(LifecycleFailed, "start_failed", err)
 		return nil, err
 	}
+	e.setLifecycle(LifecycleRunning, "running", nil)
 
 	state.ProcessPID = e.adapter.GetPID()
 	result := &EngineResult{State: state}
@@ -232,6 +281,9 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 	defer func() {
 		_ = e.adapter.Stop()
 		result.StoppedAt = e.nowFn()
+		if e.Lifecycle().Phase != LifecycleFailed {
+			e.setLifecycle(LifecycleStopped, result.Reason, nil)
+		}
 	}()
 
 	ticker := time.NewTicker(e.cfg.PollInterval)
@@ -242,19 +294,23 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 		select {
 		case <-ctx.Done():
 			result.Reason = "shutdown_requested"
+			e.setLifecycle(LifecycleStopping, result.Reason, nil)
 			updateResult()
 			return result, nil
 		case now := <-ticker.C:
 			state.Ticks++
 			if e.cfg.MaxTicks > 0 && state.Ticks > e.cfg.MaxTicks {
 				result.Reason = "max_ticks_reached"
+				e.setLifecycle(LifecycleStopping, result.Reason, nil)
 				updateResult()
 				return result, nil
 			}
 
 			if !e.adapter.IsRunning() {
+				result.Reason = "workload_exited_unexpectedly"
+				e.setLifecycle(LifecycleFailed, result.Reason, nil)
 				updateResult()
-				return result, fmt.Errorf("workload process exited unexpectedly")
+				return result, fmt.Errorf("%s", result.Reason)
 			}
 
 			ts := e.telemetryCollector.Sample(ctx)

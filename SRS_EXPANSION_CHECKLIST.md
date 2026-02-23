@@ -18,7 +18,7 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
 
 ## P0 — Core Engine + API surface foundations
 
-1. **[ ] FR-1 (Go canonical engine)**
+1. **[x] FR-1 (Go canonical engine)**
    - Implement/confirm engine package boundaries and entrypoint contracts in Go as the single source of truth.
    - Deliverable: `internal/engine` with explicit state transitions and policy orchestration.
 

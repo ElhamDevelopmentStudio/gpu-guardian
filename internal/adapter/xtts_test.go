@@ -34,9 +34,19 @@ func TestXttsAdapterStartRestartStop(t *testing.T) {
 		t.Fatal("expected process id to be set")
 	}
 
-	time.Sleep(300 * time.Millisecond)
-	if adapter.OutputBytes() == 0 {
-		t.Fatal("expected adapter output bytes to increase")
+	waitUntil := time.Now().Add(2 * time.Second)
+	for {
+		if adapter.OutputBytes() > 0 {
+			break
+		}
+		if time.Now().After(waitUntil) {
+			content, readErr := os.ReadFile(outputPath)
+			if readErr == nil && len(content) > 0 {
+				break
+			}
+			t.Fatalf("expected adapter output bytes to increase; output bytes=%d, output file size=%d, read err=%v", adapter.OutputBytes(), len(content), readErr)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if err := adapter.Restart(ctx, 2); err != nil {
