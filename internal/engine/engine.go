@@ -59,6 +59,7 @@ type Config struct {
 	ThroughputWindow      time.Duration `json:"throughput_window"`
 	ThroughputFloorWindow time.Duration `json:"throughput_floor_window"`
 	BaselineWindow        time.Duration `json:"baseline_window"`
+	MaxConcurrencyStep    int           `json:"max_concurrency_step"`
 	MaxTicks              int           `json:"max_ticks"`
 }
 
@@ -187,6 +188,41 @@ func clampInt(v, min, max int) int {
 	return v
 }
 
+func actionMinCooldown(cfg time.Duration, overrideSec float64) time.Duration {
+	if overrideSec <= 0 {
+		return cfg
+	}
+	requested := time.Duration(overrideSec * float64(time.Second))
+	if requested > cfg {
+		return requested
+	}
+	return cfg
+}
+
+func isDirectionalAction(t control.ActionType) bool {
+	return t == control.ActionIncrease || t == control.ActionDecrease
+}
+
+func isOppositeDirection(prev, next control.ActionType) bool {
+	return prev == control.ActionIncrease && next == control.ActionDecrease ||
+		prev == control.ActionDecrease && next == control.ActionIncrease
+}
+
+func boundedStepDelta(current, target, min, max, step int) int {
+	target = clampInt(target, min, max)
+	if step <= 1 {
+		step = 1
+	}
+	delta := target - current
+	if delta > step {
+		return current + step
+	}
+	if delta < -step {
+		return current - step
+	}
+	return target
+}
+
 func (e *Engine) ensureConfig() error {
 	if e.cfg.Command == "" {
 		return fmt.Errorf("command is required")
@@ -232,6 +268,9 @@ func (e *Engine) ensureConfig() error {
 	}
 	if e.cfg.MaxTicks < 0 {
 		e.cfg.MaxTicks = 0
+	}
+	if e.cfg.MaxConcurrencyStep <= 0 {
+		e.cfg.MaxConcurrencyStep = 1
 	}
 	if e.controller == nil {
 		return fmt.Errorf("controller is required")
@@ -332,7 +371,10 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 				LastActionAt:       state.LastActionAt,
 			}
 			action := e.controller.Decide(telemetryWindow, e.throughputTracker.Samples(), actionState)
-			cooldown := e.cfg.AdjustmentCooldown
+			cooldown := actionMinCooldown(e.cfg.AdjustmentCooldown, action.CooldownSec)
+			if isDirectionalAction(action.Type) && isOppositeDirection(state.LastAction.Type, action.Type) {
+				cooldown = cooldown * 2
+			}
 			if action.Type != control.ActionHold && !state.LastActionAt.IsZero() && now.Sub(state.LastActionAt) < cooldown {
 				action = control.Action{Type: control.ActionHold, Concurrency: state.CurrentConcurrency, Reason: "cooldown"}
 			}
@@ -342,39 +384,44 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 			}
 
 			if action.Type != control.ActionHold {
-				adjusted := clampInt(action.Concurrency, e.cfg.MinConcurrency, e.cfg.MaxConcurrency)
-				if adjusted != action.Concurrency {
-					reason := "at minimum"
-					if adjusted == e.cfg.MaxConcurrency {
-						reason = "at maximum"
+				target := boundedStepDelta(state.CurrentConcurrency, action.Concurrency, e.cfg.MinConcurrency, e.cfg.MaxConcurrency, e.cfg.MaxConcurrencyStep)
+				if target == state.CurrentConcurrency {
+					action = control.Action{
+						Type:        control.ActionHold,
+						Concurrency: state.CurrentConcurrency,
+						Reason:      "bounded by step/min-max",
 					}
-					action = control.Action{Type: control.ActionHold, Concurrency: adjusted, Reason: reason}
 				} else {
-					action.Concurrency = adjusted
+					action.Concurrency = target
 				}
 			}
 
 			state.LastAction = action
 			updateResult()
 			e.logger.Info("engine_tick", map[string]interface{}{
-				"timestamp":          now.Format(time.RFC3339),
-				"event":              "engine_tick",
-				"pid":                state.ProcessPID,
-				"action":             string(action.Type),
-				"action_reason":      action.Reason,
-				"concurrency":        state.CurrentConcurrency,
-				"target_concurrency": action.Concurrency,
-				"temp_c":             ts.TempC,
-				"temp_valid":         ts.TempValid,
-				"util_pct":           ts.UtilPct,
-				"util_valid":         ts.UtilValid,
-				"vram_used_mb":       ts.VramUsedMB,
-				"vram_total_mb":      ts.VramTotalMB,
-				"vram_valid":         ts.VramTotalValid && ts.VramUsedValid,
-				"throughput_bps":     throughputSample.Throughput,
-				"baseline_bps":       state.BaselineThroughput,
-				"throughput_ratio":   throughputRatio,
-				"telemetry_error":    ts.Error,
+				"timestamp":              now.Format(time.RFC3339),
+				"event":                  "engine_tick",
+				"pid":                    state.ProcessPID,
+				"action":                 string(action.Type),
+				"action_reason":          action.Reason,
+				"concurrency":            state.CurrentConcurrency,
+				"target_concurrency":     action.Concurrency,
+				"temp_c":                 ts.TempC,
+				"temp_valid":             ts.TempValid,
+				"util_pct":               ts.UtilPct,
+				"util_valid":             ts.UtilValid,
+				"vram_used_mb":           ts.VramUsedMB,
+				"vram_total_mb":          ts.VramTotalMB,
+				"vram_valid":             ts.VramTotalValid && ts.VramUsedValid,
+				"memory_pressure":        ts.MemoryPressure,
+				"memory_pressure_valid":  ts.MemoryPressureValid,
+				"throttle_risk":          ts.ThrottleRisk,
+				"throttle_risk_valid":    ts.ThrottleRiskValid,
+				"effective_cooldown_sec": cooldown.Seconds(),
+				"throughput_bps":         throughputSample.Throughput,
+				"baseline_bps":           state.BaselineThroughput,
+				"throughput_ratio":       throughputRatio,
+				"telemetry_error":        ts.Error,
 			})
 
 			if action.Type == control.ActionHold {

@@ -52,7 +52,12 @@ type StartRequest struct {
 	MaxConcurrency           int     `json:"max_concurrency"`
 	StartConcurrency         int     `json:"start_concurrency"`
 	ThroughputFloorRatio     float64 `json:"throughput_floor_ratio"`
+	TempHysteresisC          float64 `json:"temp_hysteresis_c"`
+	ThroughputRecoveryMargin float64 `json:"throughput_recovery_margin"`
+	MemoryPressureLimit      float64 `json:"memory_pressure_limit"`
+	ThrottleRiskLimit        float64 `json:"throttle_risk_limit"`
 	AdjustmentCooldownSec    int     `json:"adjustment_cooldown_sec"`
+	MaxConcurrencyStep       int     `json:"max_concurrency_step"`
 	BaselineWindowSec        int     `json:"baseline_window_sec"`
 	ThroughputWindowSec      int     `json:"throughput_window_sec"`
 	ThroughputFloorWindowSec int     `json:"throughput_floor_window_sec"`
@@ -387,11 +392,16 @@ func (s *Server) startSession(ctx context.Context, req StartRequest) (string, er
 		EchoOutput:  req.EchoWorkloadOutput,
 	}
 	controlCfg := control.RuleConfig{
-		SoftTemp:             req.SoftTemp,
-		HardTemp:             req.HardTemp,
-		ThroughputFloorRatio: req.ThroughputFloorRatio,
-		ThroughputWindowSec:  req.ThroughputWindowSec,
-		ThroughputFloorSec:   req.ThroughputFloorWindowSec,
+		SoftTemp:                 req.SoftTemp,
+		HardTemp:                 req.HardTemp,
+		ThroughputFloorRatio:     req.ThroughputFloorRatio,
+		ThroughputWindowSec:      req.ThroughputWindowSec,
+		ThroughputFloorSec:       req.ThroughputFloorWindowSec,
+		TempHysteresisC:          req.TempHysteresisC,
+		ThroughputRecoveryMargin: req.ThroughputRecoveryMargin,
+		MemoryPressureLimit:      req.MemoryPressureLimit,
+		ThrottleRiskLimit:        req.ThrottleRiskLimit,
+		MaxConcurrencyStep:       req.MaxConcurrencyStep,
 	}
 	controller := control.NewRuleController(controlCfg)
 
@@ -529,6 +539,7 @@ func StartRequestToEngineConfig(req StartRequest) engine.Config {
 		ThroughputWindow:      time.Duration(req.ThroughputWindowSec) * time.Second,
 		ThroughputFloorWindow: time.Duration(req.ThroughputFloorWindowSec) * time.Second,
 		BaselineWindow:        time.Duration(req.BaselineWindowSec) * time.Second,
+		MaxConcurrencyStep:    req.MaxConcurrencyStep,
 		MaxTicks:              req.MaxTicks,
 	}
 }
@@ -537,6 +548,18 @@ func normalizeStartRequest(req *StartRequest) {
 	req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
 	if req.Mode != string(SessionModeStateful) {
 		req.Mode = string(SessionModeStateless)
+	}
+	if req.TempHysteresisC <= 0 {
+		req.TempHysteresisC = 2
+	}
+	if req.ThroughputRecoveryMargin <= 0 {
+		req.ThroughputRecoveryMargin = 0.05
+	}
+	if req.MemoryPressureLimit <= 0 {
+		req.MemoryPressureLimit = 0.9
+	}
+	if req.ThrottleRiskLimit <= 0 {
+		req.ThrottleRiskLimit = 0.85
 	}
 	if req.PollIntervalSec <= 0 {
 		req.PollIntervalSec = 2
@@ -567,6 +590,9 @@ func normalizeStartRequest(req *StartRequest) {
 	}
 	if req.AdjustmentCooldownSec <= 0 {
 		req.AdjustmentCooldownSec = 10
+	}
+	if req.MaxConcurrencyStep <= 0 {
+		req.MaxConcurrencyStep = 1
 	}
 	if req.BaselineWindowSec <= 0 {
 		req.BaselineWindowSec = 120

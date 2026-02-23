@@ -36,10 +36,15 @@ type Config struct {
 	StartConcurrency         int     `json:"start_concurrency"`
 	ThroughputFloorRatio     float64 `json:"throughput_floor_ratio"`
 	AdjustmentCooldownSec    int     `json:"adjustment_cooldown_sec"`
+	TempHysteresisC          float64 `json:"temp_hysteresis_c"`
+	ThroughputRecoveryMargin float64 `json:"throughput_recovery_margin"`
+	MemoryPressureLimit      float64 `json:"memory_pressure_limit"`
+	ThrottleRiskLimit        float64 `json:"throttle_risk_limit"`
 	BaselineWindowSec        int     `json:"baseline_window_sec"`
 	ThroughputWindowSec      int     `json:"throughput_window_sec"`
 	ThroughputFloorWindowSec int     `json:"throughput_floor_window_sec"`
 	AdapterStopTimeoutSec    int     `json:"adapter_stop_timeout_sec"`
+	MaxConcurrencyStep       int     `json:"max_concurrency_step"`
 	LogPath                  string  `json:"log_file"`
 	LogMaxSizeMB             int     `json:"log_max_size_mb"`
 	WorkloadLogPath          string  `json:"workload_log_path"`
@@ -57,10 +62,15 @@ func defaultConfig() Config {
 		StartConcurrency:         4,
 		ThroughputFloorRatio:     0.7,
 		AdjustmentCooldownSec:    10,
+		TempHysteresisC:          2,
+		ThroughputRecoveryMargin: 0.05,
+		MemoryPressureLimit:      0.9,
+		ThrottleRiskLimit:        0.85,
 		BaselineWindowSec:        120,
 		ThroughputWindowSec:      30,
 		ThroughputFloorWindowSec: 30,
 		AdapterStopTimeoutSec:    5,
+		MaxConcurrencyStep:       1,
 		LogPath:                  "guardian.log",
 		LogMaxSizeMB:             50,
 		EchoWorkloadOutput:       false,
@@ -129,6 +139,21 @@ func normalizeConfig(cfg *Config) error {
 	if cfg.ThroughputFloorRatio <= 0 {
 		cfg.ThroughputFloorRatio = 0.7
 	}
+	if cfg.TempHysteresisC < 0 {
+		cfg.TempHysteresisC = 2
+	}
+	if cfg.ThroughputRecoveryMargin < 0 {
+		cfg.ThroughputRecoveryMargin = 0.05
+	}
+	if cfg.ThroughputRecoveryMargin == 0 {
+		cfg.ThroughputRecoveryMargin = 0.05
+	}
+	if cfg.MemoryPressureLimit <= 0 {
+		cfg.MemoryPressureLimit = 0.9
+	}
+	if cfg.ThrottleRiskLimit <= 0 {
+		cfg.ThrottleRiskLimit = 0.85
+	}
 	if cfg.AdjustmentCooldownSec <= 0 {
 		cfg.AdjustmentCooldownSec = 10
 	}
@@ -143,6 +168,9 @@ func normalizeConfig(cfg *Config) error {
 	}
 	if cfg.AdapterStopTimeoutSec <= 0 {
 		cfg.AdapterStopTimeoutSec = 5
+	}
+	if cfg.MaxConcurrencyStep <= 0 {
+		cfg.MaxConcurrencyStep = 1
 	}
 	if cfg.LogMaxSizeMB < 1 {
 		cfg.LogMaxSizeMB = 50
@@ -206,11 +234,16 @@ func runControl(args []string) error {
 	maxConc := fs.Int("max-concurrency", cfg.MaxConcurrency, "Maximum concurrency")
 	startConc := fs.Int("start-concurrency", cfg.StartConcurrency, "Initial concurrency")
 	floor := fs.Float64("throughput-floor-ratio", cfg.ThroughputFloorRatio, "Throughput floor as fraction of baseline")
+	tempHysteresis := fs.Float64("temp-hysteresis-c", cfg.TempHysteresisC, "Temperature debounce margin before scale-up")
+	tpRecovery := fs.Float64("throughput-recovery-margin", cfg.ThroughputRecoveryMargin, "Throughput recovery margin above floor before scale-up")
+	memLimit := fs.Float64("memory-pressure-limit", cfg.MemoryPressureLimit, "Memory pressure limit above which to reduce load")
+	riskLimit := fs.Float64("throttle-risk-limit", cfg.ThrottleRiskLimit, "Throttle risk limit above which to reduce load")
 	cooldown := fs.Int("adjustment-cooldown-sec", cfg.AdjustmentCooldownSec, "Action cooldown in seconds")
 	blWindow := fs.Int("baseline-window-sec", cfg.BaselineWindowSec, "Baseline warmup window in seconds")
 	tpWindow := fs.Int("throughput-window-sec", cfg.ThroughputWindowSec, "Throughput lookback window in seconds")
 	tpFloorWindow := fs.Int("throughput-floor-window-sec", cfg.ThroughputFloorWindowSec, "Required duration below throughput floor to trigger a scale-down")
 	stopTimeout := fs.Int("adapter-stop-timeout-sec", cfg.AdapterStopTimeoutSec, "Graceful stop timeout in seconds")
+	maxStep := fs.Int("max-concurrency-step", cfg.MaxConcurrencyStep, "Maximum concurrency step size")
 	logFile := fs.String("log-file", cfg.LogPath, "Path for structured JSON logs")
 	logMaxMB := fs.Int("log-max-size-mb", cfg.LogMaxSizeMB, "Log rotation size in MB")
 	workloadLog := fs.String("workload-log", cfg.WorkloadLogPath, "Path for raw workload stdout/stderr log")
@@ -228,7 +261,12 @@ func runControl(args []string) error {
 	cfg.MaxConcurrency = *maxConc
 	cfg.StartConcurrency = *startConc
 	cfg.ThroughputFloorRatio = *floor
+	cfg.TempHysteresisC = *tempHysteresis
+	cfg.ThroughputRecoveryMargin = *tpRecovery
+	cfg.MemoryPressureLimit = *memLimit
+	cfg.ThrottleRiskLimit = *riskLimit
 	cfg.AdjustmentCooldownSec = *cooldown
+	cfg.MaxConcurrencyStep = *maxStep
 	cfg.BaselineWindowSec = *blWindow
 	cfg.ThroughputWindowSec = *tpWindow
 	cfg.ThroughputFloorWindowSec = *tpFloorWindow
@@ -284,11 +322,16 @@ func runControlLocal(ctx context.Context, cfg Config) error {
 	})
 
 	controlCfg := control.RuleConfig{
-		SoftTemp:             cfg.SoftTemp,
-		HardTemp:             cfg.HardTemp,
-		ThroughputFloorRatio: cfg.ThroughputFloorRatio,
-		ThroughputWindowSec:  cfg.ThroughputWindowSec,
-		ThroughputFloorSec:   cfg.ThroughputFloorWindowSec,
+		SoftTemp:                 cfg.SoftTemp,
+		HardTemp:                 cfg.HardTemp,
+		ThroughputFloorRatio:     cfg.ThroughputFloorRatio,
+		ThroughputWindowSec:      cfg.ThroughputWindowSec,
+		ThroughputFloorSec:       cfg.ThroughputFloorWindowSec,
+		TempHysteresisC:          cfg.TempHysteresisC,
+		ThroughputRecoveryMargin: cfg.ThroughputRecoveryMargin,
+		MemoryPressureLimit:      cfg.MemoryPressureLimit,
+		ThrottleRiskLimit:        cfg.ThrottleRiskLimit,
+		MaxConcurrencyStep:       cfg.MaxConcurrencyStep,
 	}
 	controller := control.NewRuleController(controlCfg)
 
@@ -315,6 +358,7 @@ func runControlLocal(ctx context.Context, cfg Config) error {
 		ThroughputWindow:      time.Duration(cfg.ThroughputWindowSec) * time.Second,
 		ThroughputFloorWindow: time.Duration(cfg.ThroughputFloorWindowSec) * time.Second,
 		BaselineWindow:        time.Duration(cfg.BaselineWindowSec) * time.Second,
+		MaxConcurrencyStep:    cfg.MaxConcurrencyStep,
 		MaxTicks:              cfg.MaxTicks,
 	}
 
@@ -363,6 +407,7 @@ func startDaemonSession(cfg Config) (string, error) {
 		BaselineWindowSec:        cfg.BaselineWindowSec,
 		ThroughputWindowSec:      cfg.ThroughputWindowSec,
 		ThroughputFloorWindowSec: cfg.ThroughputFloorWindowSec,
+		MaxConcurrencyStep:       cfg.MaxConcurrencyStep,
 		AdapterStopTimeoutSec:    cfg.AdapterStopTimeoutSec,
 		LogPath:                  cfg.LogPath,
 		LogMaxSizeMB:             cfg.LogMaxSizeMB,

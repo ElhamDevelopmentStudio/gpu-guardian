@@ -4,8 +4,11 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elhamdev/gpu-guardian/internal/control"
+	"github.com/elhamdev/gpu-guardian/internal/telemetry"
+	"github.com/elhamdev/gpu-guardian/internal/throughput"
 )
 
 func TestEngineLifecycleTransitionsWithImmediateShutdown(t *testing.T) {
@@ -75,10 +78,95 @@ func TestEngineLifecycleInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestEngineAppliesBoundedConcurrencyStep(t *testing.T) {
+	adapter := &fakeAdapter{}
+	ctrl := &scriptedController{
+		actions: []control.Action{
+			{Type: control.ActionIncrease, Concurrency: 10},
+		},
+	}
+
+	e := New(
+		Config{
+			Command:            "python generate_xtts.py",
+			MinConcurrency:     1,
+			MaxConcurrency:     10,
+			StartConcurrency:   2,
+			AdjustmentCooldown: 0,
+			PollInterval:       10 * time.Millisecond,
+			MaxConcurrencyStep: 2,
+			MaxTicks:           2,
+		},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	result, err := e.Start(context.Background())
+	if err != nil {
+		t.Fatalf("engine start failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected engine result")
+	}
+	if adapter.restartCount != 1 {
+		t.Fatalf("expected one restart, got %d", adapter.restartCount)
+	}
+	if result.State.CurrentConcurrency != 4 {
+		t.Fatalf("expected bounded concurrency 4, got %d", result.State.CurrentConcurrency)
+	}
+}
+
+func TestEngineHoldsOnDirectionalCooldown(t *testing.T) {
+	adapter := &fakeAdapter{}
+	ctrl := &scriptedController{
+		actions: []control.Action{
+			{Type: control.ActionIncrease, Concurrency: 3},
+			{Type: control.ActionDecrease, Concurrency: 1},
+			{Type: control.ActionHold, Concurrency: 1},
+		},
+	}
+
+	e := New(
+		Config{
+			Command:            "python generate_xtts.py",
+			MinConcurrency:     1,
+			MaxConcurrency:     4,
+			StartConcurrency:   2,
+			AdjustmentCooldown: 100 * time.Millisecond,
+			PollInterval:       10 * time.Millisecond,
+			MaxConcurrencyStep: 1,
+			MaxTicks:           3,
+		},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	result, err := e.Start(context.Background())
+	if err != nil {
+		t.Fatalf("engine start failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected engine result")
+	}
+	if result.State.CurrentConcurrency != 3 {
+		t.Fatalf("expected concurrency 3 after first increase, got %d", result.State.CurrentConcurrency)
+	}
+	if adapter.restartCount != 1 {
+		t.Fatalf("expected one restart due cooldown hold, got %d", adapter.restartCount)
+	}
+}
+
 type fakeAdapter struct {
-	mu      sync.Mutex
-	pid     int
-	running bool
+	mu           sync.Mutex
+	pid          int
+	running      bool
+	restartCount int
 }
 
 func (a *fakeAdapter) Start(_ context.Context, _ string, _ int) error {
@@ -121,6 +209,7 @@ func (a *fakeAdapter) GetProgress() float64 {
 func (a *fakeAdapter) Restart(context.Context, int) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.restartCount++
 	a.pid++
 	if a.pid == 0 {
 		a.pid = 1
@@ -153,4 +242,18 @@ func (a *fakeAdapter) IsRunning() bool {
 
 func (a *fakeAdapter) OutputBytes() uint64 {
 	return 0
+}
+
+type scriptedController struct {
+	actions []control.Action
+	idx     int
+}
+
+func (s *scriptedController) Decide(_ []telemetry.TelemetrySample, _ []throughput.Sample, _ control.State) control.Action {
+	if s.idx >= len(s.actions) {
+		return control.Action{Type: control.ActionHold}
+	}
+	action := s.actions[s.idx]
+	s.idx++
+	return action
 }

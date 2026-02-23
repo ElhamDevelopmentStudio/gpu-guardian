@@ -20,7 +20,7 @@ func TestControlLoopE2EWithMaxTicks(t *testing.T) {
 	workloadLog := filepath.Join(tmpDir, "workload.log")
 
 	nvidiaScript := filepath.Join(tmpDir, "nvidia-smi")
-	script := "#!/bin/sh\nprintf '72, 35, 4096, 8192\\n'\n"
+	script := "#!/bin/sh\nprintf '72, 35, 4096, 8192, 120.0, 160.0, 1500, 5000\\n'\n"
 	if err := os.WriteFile(nvidiaScript, []byte(script), 0o755); err != nil {
 		t.Fatalf("failed to write fake nvidia-smi: %v", err)
 	}

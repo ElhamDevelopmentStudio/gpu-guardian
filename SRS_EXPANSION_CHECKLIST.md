@@ -40,11 +40,12 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
    - Include stateless/ephemeral mode and persisted session/profile mode.
    - Implement pause/safe-stop behavior when recovery fails by policy.
 
-5. **[ ] FR-14 + FR-15 + FR-16 + FR-20 (Engine control behavior)**
-   - Run policy loop at configurable frequency.
-   - Base decisions on thermal + throughput + memory + throttle risk inputs.
-   - Support control adjustments for concurrency and related levers (batch/chunk when available).
-   - Enforce anti-oscillation at engine level (minimum dwell, hysteresis, bounded deltas).
+5. **[x] FR-14 + FR-15 + FR-16 + FR-20 (Engine control behavior)**
+  - Implemented in `internal/control` (`RuleController`) and `internal/engine`.
+  - Control loop remains frequency-driven via `poll_interval_sec` and now includes throttle-risk and memory-aware inputs.
+  - Telemetry now collects power and clock signals (with graceful fallback to core fields) and derives memory pressure + throttle risk.
+  - Engine now supports dynamic cooldown windows (policy override + directional anti-oscillation), bounded concurrency deltas, and per-adjustment logging.
+  - Control knobs added to config/daemon request path for hysteresis and adjustment behavior.
 
 6. **[ ] FR-17 + FR-18 + FR-19 (Throughput floor + recovery fallback)**
    - Implement configurable throughput floor logic (70–80% baseline OR ≤2× sustained slowdown fallback).

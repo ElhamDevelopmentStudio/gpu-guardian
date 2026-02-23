@@ -42,12 +42,17 @@ All flags:
 - `--poll-interval-sec`
 - `--soft-temp`
 - `--hard-temp`
+- `--temp-hysteresis-c`
 - `--min-concurrency`, `--max-concurrency`, `--start-concurrency`
+- `--throughput-recovery-margin`
 - `--throughput-floor-ratio`
 - `--adjustment-cooldown-sec`
+- `--memory-pressure-limit`
+- `--throttle-risk-limit`
 - `--baseline-window-sec`
 - `--throughput-window-sec`
 - `--throughput-floor-window-sec`
+- `--max-concurrency-step`
 - `--adapter-stop-timeout-sec`
 - `--log-file`, `--log-max-size-mb`
 - `--workload-log`
@@ -67,8 +72,13 @@ Save defaults to `.guardian-mvp.json` (or pass `--config`):
   "min_concurrency": 1,
   "max_concurrency": 8,
   "start_concurrency": 4,
+  "temp_hysteresis_c": 2,
+  "throughput_recovery_margin": 0.05,
+  "memory_pressure_limit": 0.9,
+  "throttle_risk_limit": 0.85,
   "throughput_floor_ratio": 0.7,
   "adjustment_cooldown_sec": 10,
+  "max_concurrency_step": 1,
   "baseline_window_sec": 120,
   "throughput_window_sec": 30,
   "throughput_floor_window_sec": 30,
