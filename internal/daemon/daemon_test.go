@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -217,6 +218,91 @@ func TestSessionRecoveryPausesOnRepeatedFailure(t *testing.T) {
 	}
 	if len(onDisk.Errors) == 0 {
 		t.Fatalf("expected checkpoint to include errors")
+	}
+}
+
+func TestSessionRecoversFromTransientFailureAndContinues(t *testing.T) {
+	s := NewServer(DefaultListenAddress)
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	flagPath := filepath.Join(t.TempDir(), "guardian-recovery-flag")
+	cmd := fmt.Sprintf(
+		"sh -lc 'if [ ! -f %s ]; then touch %s; exit 1; fi; while true; do sleep 0.05; done'",
+		flagPath,
+		flagPath,
+	)
+
+	startReq := StartRequest{
+		Command:                  cmd,
+		PollIntervalSec:          1,
+		SoftTemp:                 78,
+		HardTemp:                 84,
+		MinConcurrency:           1,
+		MaxConcurrency:           1,
+		StartConcurrency:         1,
+		ThroughputFloorRatio:     0.7,
+		AdjustmentCooldownSec:    1,
+		BaselineWindowSec:        3,
+		ThroughputWindowSec:      1,
+		ThroughputFloorWindowSec: 1,
+		AdapterStopTimeoutSec:    1,
+		RecoveryMaxRetries:       2,
+		RecoveryCooldownSec:      0,
+	}
+
+	startBody, err := json.Marshal(startReq)
+	if err != nil {
+		t.Fatalf("failed to marshal start request: %v", err)
+	}
+	r, err := http.Post(ts.URL+"/v1/sessions", "application/json", bytes.NewReader(startBody))
+	if err != nil {
+		t.Fatalf("start request failed: %v", err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", r.StatusCode)
+	}
+	var startResp SessionResponse
+	if err := json.NewDecoder(r.Body).Decode(&startResp); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if startResp.SessionID == "" {
+		t.Fatal("expected session id")
+	}
+
+	if !waitUntil(func() bool {
+		session, err := getSession(ts.URL, startResp.SessionID)
+		if err != nil {
+			return false
+		}
+		return session.Running && session.Retries >= 1 && session.Goal != string(SessionGoalPaused) && session.Goal != string(SessionGoalStopped)
+	}, 6*time.Second) {
+		t.Fatal("session did not recover to running state after transient failure")
+	}
+
+	state, err := getSession(ts.URL, startResp.SessionID)
+	if err != nil {
+		t.Fatalf("failed to query session state: %v", err)
+	}
+	if state.Goal == string(SessionGoalPaused) || state.Goal == string(SessionGoalStopped) {
+		t.Fatalf("expected goal to be active after recovery, got %q", state.Goal)
+	}
+	if state.Retries < 1 {
+		t.Fatalf("expected at least one recovery attempt, got %d", state.Retries)
+	}
+
+	if err := postJSONWithNoBody(ts.URL+"/v1/sessions/"+startResp.SessionID+"/stop", http.MethodPost); err != nil {
+		t.Fatalf("failed to stop session: %v", err)
+	}
+	if !waitUntil(func() bool {
+		session, err := getSession(ts.URL, startResp.SessionID)
+		if err != nil {
+			return false
+		}
+		return !session.Running
+	}, 10*time.Second) {
+		t.Fatal("session never stopped")
 	}
 }
 

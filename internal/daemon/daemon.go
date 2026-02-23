@@ -543,6 +543,7 @@ func (s *Server) stopSession(id string) error {
 	}
 	if !sess.running {
 		sess.goal = string(SessionGoalPaused)
+		sess.running = false
 		sess.stoppedAt = time.Now()
 		s.mu.Unlock()
 		s.persistSessionState(sess)
@@ -551,6 +552,7 @@ func (s *Server) stopSession(id string) error {
 
 	sess.cancel()
 	sess.goal = string(SessionGoalPaused)
+	sess.running = false
 	sess.stoppedAt = time.Now()
 	s.mu.Unlock()
 	s.persistSessionState(sess)
