@@ -73,9 +73,24 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
      - `internal/control/estimator_test.go` (`TestStateEstimatorComputesDerivedSignals`, `TestStateEstimatorAppliesSmoothing`, `TestStateEstimatorHandlesMissingData`)
      - `internal/engine/engine_test.go` (`TestEngineReportsStateEstimate`)
 
-3. **[ ] FR-15 + FR-20 (Risk-aware policy input quality)**
-   - Ensure policy decisions are driven by estimates, not raw spikes.
-   - Apply hysteresis and cooldown logic based on estimated state and confidence.
+3. **[x] FR-15 + FR-20 (Risk-aware policy input quality)**
+  - ✅ Implemented estimate-driven control signals in `internal/control` (`RuleController`):
+    - New estimate gates in `shouldIncrease(...)`: requires estimate confidence and stability before scale-up.
+    - Decrease decisions now prefer smoothed estimate-derived signals:
+      - estimate throttle risk (`throttle_risk_score`) in preference to raw throttle risk,
+      - max temp slope (`temp_slope_c_per_sec`) floor,
+      - throughput trend (`throughput_trend`) drop limit,
+      - estimate confidence hold condition.
+    - Added new config fields in rule configuration API: `estimate_confidence_min`, `max_temp_slope_c_per_sec`, `min_stability_index_for_increase`, `throughput_trend_drop_limit` (with sane defaults in `defaults()`).
+  - Added unit tests in `internal/control/controller_test.go`:
+    - `TestRuleController_UsesEstimateConfidenceForHold`
+    - `TestRuleController_UsesEstimateToBlockIncrease`
+    - `TestRuleController_UsesEstimateRiskAndTrendSignals`
+  - Verified behavior via full test matrix:
+    - `go test ./...`
+    - `go test ./... -tags=integration`
+    - `go test ./... -tags=e2e`
+    - `go test ./... -tags=regression`
 
 4. **[ ] FR-2 (Persisted calibration/session profile integration)**
    - Move startup and checkpoint defaults to profile-backed initialization.

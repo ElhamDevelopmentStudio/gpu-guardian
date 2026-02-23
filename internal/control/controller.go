@@ -52,6 +52,10 @@ type RuleConfig struct {
 	ThroughputRecoveryMargin         float64
 	MemoryPressureLimit              float64
 	ThrottleRiskLimit                float64
+	EstimateConfidenceMin            float64
+	MaxTempSlopeCPerSec              float64
+	MinStabilityIndexForIncrease     float64
+	ThroughputTrendDropLimit         float64
 	MaxConcurrencyStep               int
 }
 
@@ -68,6 +72,10 @@ type RuleController struct {
 	ThroughputRecoveryMargin         float64
 	MemoryPressureLimit              float64
 	ThrottleRiskLimit                float64
+	EstimateConfidenceMin            float64
+	MaxTempSlopeCPerSec              float64
+	MinStabilityIndexForIncrease     float64
+	ThroughputTrendDropLimit         float64
 	MaxConcurrencyStep               int
 
 	throughputRecoveryAttempts int
@@ -87,6 +95,10 @@ func NewRuleController(cfg RuleConfig) *RuleController {
 		ThroughputRecoveryMargin:         cfg.ThroughputRecoveryMargin,
 		MemoryPressureLimit:              cfg.MemoryPressureLimit,
 		ThrottleRiskLimit:                cfg.ThrottleRiskLimit,
+		EstimateConfidenceMin:            cfg.EstimateConfidenceMin,
+		MaxTempSlopeCPerSec:              cfg.MaxTempSlopeCPerSec,
+		MinStabilityIndexForIncrease:     cfg.MinStabilityIndexForIncrease,
+		ThroughputTrendDropLimit:         cfg.ThroughputTrendDropLimit,
 		MaxConcurrencyStep:               cfg.MaxConcurrencyStep,
 	}
 }
@@ -127,6 +139,18 @@ func (c *RuleController) defaults() {
 	}
 	if c.MaxConcurrencyStep <= 0 {
 		c.MaxConcurrencyStep = 1
+	}
+	if c.EstimateConfidenceMin <= 0 {
+		c.EstimateConfidenceMin = 0.4
+	}
+	if c.MaxTempSlopeCPerSec <= 0 {
+		c.MaxTempSlopeCPerSec = 2.0
+	}
+	if c.MinStabilityIndexForIncrease <= 0 {
+		c.MinStabilityIndexForIncrease = 0.55
+	}
+	if c.ThroughputTrendDropLimit >= 0 {
+		c.ThroughputTrendDropLimit = -0.18
 	}
 }
 
@@ -191,8 +215,14 @@ func (c *RuleController) avgThroughput(samples []throughput.Sample, window time.
 	return sum / float64(count)
 }
 
-func (c *RuleController) shouldIncrease(state State, avgTp float64, temp int, memPressure float64, throttleRisk float64) bool {
+func (c *RuleController) shouldIncrease(state State, avgTp float64, temp int, memPressure float64, throttleRisk float64, estimate StateEstimate) bool {
 	if state.CurrentConcurrency >= state.MaxConcurrency {
+		return false
+	}
+	if estimate.StabilityIndexValid && estimate.StabilityIndex < c.MinStabilityIndexForIncrease {
+		return false
+	}
+	if estimate.ConfidenceValid && estimate.Confidence < c.EstimateConfidenceMin {
 		return false
 	}
 	if float64(temp) > c.SoftTemp-c.TempHysteresisC {
@@ -274,6 +304,12 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 	prevTemp, prevTempValid := previousTemp(samples)
 	memPressure, memPressureValid := latestMemoryPressure(samples)
 	throttleRisk, throttleRiskValid := latestThrottleRisk(samples)
+	estThrottleRisk := throttleRisk
+	estThrottleRiskValid := throttleRiskValid
+	if state.Estimate.ThrottleRiskScoreValid {
+		estThrottleRisk = state.Estimate.ThrottleRiskScore
+		estThrottleRiskValid = true
+	}
 	if tempValid {
 		if float64(temp) >= c.HardTemp {
 			action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "temperature at hard limit")
@@ -293,10 +329,20 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 		action.CooldownSec = 1.5
 		return action
 	}
+	if state.Estimate.TempSlopeValid && state.Estimate.TempSlopeCPerSec >= c.MaxTempSlopeCPerSec {
+		action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "temperature rising too fast")
+		action.CooldownSec = 1.5
+		return action
+	}
 
-	if throttleRiskValid && throttleRisk >= c.ThrottleRiskLimit {
+	if estThrottleRiskValid && estThrottleRisk >= c.ThrottleRiskLimit {
 		action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throttle risk elevated")
 		action.CooldownSec = 1.5
+		return action
+	}
+	if state.Estimate.ThroughputTrendValid && state.Estimate.ThroughputTrend < c.ThroughputTrendDropLimit {
+		action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throughput trend dropped")
+		action.CooldownSec = 1.25
 		return action
 	}
 
@@ -329,7 +375,12 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 		return action
 	}
 
-	if c.shouldIncrease(state, avgTp, temp, memPressure, throttleRisk) {
+	if state.Estimate.ConfidenceValid && state.Estimate.Confidence < c.EstimateConfidenceMin {
+		action.Reason = "estimate confidence below configured threshold"
+		return action
+	}
+
+	if c.shouldIncrease(state, avgTp, temp, memPressure, estThrottleRisk, state.Estimate) {
 		action = actionIncrease(state.CurrentConcurrency, 1, "temperature and throughput stable")
 		return action
 	}

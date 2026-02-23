@@ -337,3 +337,112 @@ func TestRuleController_RecoversFloorStateAfterRecovery(t *testing.T) {
 		t.Fatalf("expected new recovery to restart after recovery reset, got %s", action3.Type)
 	}
 }
+
+func TestRuleController_UsesEstimateConfidenceForHold(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		EstimateConfidenceMin:    0.7,
+		SoftTemp:                 78,
+		HardTemp:                 90,
+		ThroughputFloorRatio:     0.7,
+		ThroughputWindowSec:      30,
+		ThroughputFloorSec:       30,
+		ThroughputRecoveryMargin: 0.05,
+	})
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 60, TempValid: true},
+	}
+	throughSamples := []throughput.Sample{
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 20},
+		{Timestamp: now, Throughput: 20},
+	}
+	state := State{
+		CurrentConcurrency: 4,
+		MinConcurrency:     1,
+		MaxConcurrency:     8,
+		Estimate: StateEstimate{
+			Confidence:      0.2,
+			ConfidenceValid: true,
+		},
+	}
+	action := c.Decide(telemetrySamples, throughSamples, state)
+	if action.Type != ActionHold {
+		t.Fatalf("expected hold on low estimate confidence, got %s", action.Type)
+	}
+}
+
+func TestRuleController_UsesEstimateToBlockIncrease(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		TempHysteresisC:      2,
+		SoftTemp:             78,
+		HardTemp:             90,
+		ThroughputFloorRatio: 0.7,
+		ThroughputWindowSec:  30,
+		ThroughputFloorSec:   30,
+	})
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 60, TempValid: true},
+	}
+	throughSamples := []throughput.Sample{
+		{Timestamp: now.Add(-2 * time.Second), Throughput: 8},
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 9},
+		{Timestamp: now, Throughput: 10},
+	}
+	state := State{
+		CurrentConcurrency: 4,
+		MinConcurrency:     1,
+		MaxConcurrency:     8,
+		BaselineThroughput: 10,
+		Estimate: StateEstimate{
+			StabilityIndex:      0.1,
+			StabilityIndexValid: true,
+			Confidence:          1,
+			ConfidenceValid:     true,
+		},
+	}
+	action := c.Decide(telemetrySamples, throughSamples, state)
+	if action.Type != ActionHold {
+		t.Fatalf("expected hold on unstable estimate state, got %s", action.Type)
+	}
+}
+
+func TestRuleController_UsesEstimateRiskAndTrendSignals(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		MaxTempSlopeCPerSec:      1.5,
+		ThroughputTrendDropLimit: -0.1,
+		TempHysteresisC:          2,
+		SoftTemp:                 78,
+		HardTemp:                 90,
+		ThroughputFloorRatio:     0.7,
+		ThroughputWindowSec:      30,
+		ThroughputFloorSec:       30,
+	})
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 60, TempValid: true},
+	}
+	throughSamples := []throughput.Sample{
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 10},
+		{Timestamp: now, Throughput: 10},
+	}
+	state := State{
+		CurrentConcurrency: 4,
+		MinConcurrency:     1,
+		MaxConcurrency:     8,
+		Estimate: StateEstimate{
+			TempSlopeCPerSec:       3,
+			TempSlopeValid:         true,
+			ThroughputTrend:        -0.25,
+			ThroughputTrendValid:   true,
+			ThrottleRiskScore:      0.95,
+			ThrottleRiskScoreValid: true,
+			Confidence:             0.9,
+			ConfidenceValid:        true,
+		},
+	}
+	action := c.Decide(telemetrySamples, throughSamples, state)
+	if action.Type != ActionDecrease {
+		t.Fatalf("expected decrease based on estimated thermal/risk/trend signals, got %s", action.Type)
+	}
+}
