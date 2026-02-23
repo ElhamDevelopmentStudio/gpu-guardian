@@ -72,6 +72,8 @@ All flags:
 - `--step-samples`, `--warmup-samples` (calibrate mode)
 - `--throughput-drop-ratio`, `--hard-temp`, `--output` (calibrate mode)
 - `--config <path>` (optional JSON config; values are defaults with overrides)
+- `--profile-path` (shared profile persistence path, default `.guardian-profiles.json`)
+- `--workload-type` (profile namespace key for `control` resume and `calibrate` persistence)
 
 ### JSON config
 

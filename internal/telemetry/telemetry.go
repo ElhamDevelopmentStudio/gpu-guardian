@@ -11,6 +11,8 @@ import (
 )
 
 type TelemetrySample struct {
+	GPUUUID              string    `json:"gpu_uuid"`
+	GPUUUIDValid         bool      `json:"gpu_uuid_valid"`
 	Timestamp            time.Time `json:"timestamp"`
 	TempC                int       `json:"temp_c"`
 	TempValid            bool      `json:"temp_valid"`
@@ -61,7 +63,7 @@ func parseIntField(v string) (int, error) {
 	return strconv.Atoi(v)
 }
 
-const nvidiaQueryFields = "temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,clocks.current.sm,clocks.current.memory,clocks_throttle_reasons.active"
+const nvidiaQueryFields = "gpu_uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,clocks.current.sm,clocks.current.memory,clocks_throttle_reasons.active"
 const nvidiaQueryFieldsFallback = "temperature.gpu,utilization.gpu,memory.used,memory.total"
 
 func runNvidiaSMI(ctx context.Context, query string) ([]byte, error) {
@@ -86,6 +88,10 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+func isGPUUUID(v string) bool {
+	return strings.HasPrefix(strings.TrimSpace(v), "GPU-")
 }
 
 func (c *Collector) Sample(ctx context.Context) TelemetrySample {
@@ -114,71 +120,79 @@ func (c *Collector) Sample(ctx context.Context) TelemetrySample {
 		return s
 	}
 
-	parseCoreFields := func() {
-		if val, err := parseIntField(parts[0]); err == nil {
-			s.TempC = val
-			s.TempValid = true
-		} else {
-			s.Error = fmt.Sprintf("%s; temp parse failed: %v", s.Error, err)
-		}
-
-		if val, err := parseFloatField(parts[1]); err == nil {
-			s.UtilPct = val
-			s.UtilValid = true
-		} else {
-			s.Error = fmt.Sprintf("%s; util parse failed: %v", s.Error, err)
-		}
-
-		if val, err := parseIntField(parts[2]); err == nil {
-			s.VramUsedMB = val
-			s.VramUsedValid = true
-		} else {
-			s.Error = fmt.Sprintf("%s; memory.used parse failed: %v", s.Error, err)
-		}
-
-		if val, err := parseIntField(parts[3]); err == nil {
-			s.VramTotalMB = val
-			s.VramTotalValid = true
-		} else {
-			s.Error = fmt.Sprintf("%s; memory.total parse failed: %v", s.Error, err)
-		}
+	coreOffset := 0
+	if len(parts) > 0 && isGPUUUID(parts[0]) {
+		s.GPUUUID = strings.TrimSpace(parts[0])
+		s.GPUUUIDValid = true
+		coreOffset = 1
 	}
 
-	parseCoreFields()
-	if len(parts) < 9 {
+	if len(parts) < coreOffset+4 {
 		setDerivedMetrics(&s)
 		return s
 	}
 
-	if val, err := parseFloatField(parts[4]); err == nil {
+	if val, err := parseIntField(parts[coreOffset+0]); err == nil {
+		s.TempC = val
+		s.TempValid = true
+	} else {
+		s.Error = fmt.Sprintf("%s; temp parse failed: %v", s.Error, err)
+	}
+
+	if val, err := parseFloatField(parts[coreOffset+1]); err == nil {
+		s.UtilPct = val
+		s.UtilValid = true
+	} else {
+		s.Error = fmt.Sprintf("%s; util parse failed: %v", s.Error, err)
+	}
+
+	if val, err := parseIntField(parts[coreOffset+2]); err == nil {
+		s.VramUsedMB = val
+		s.VramUsedValid = true
+	} else {
+		s.Error = fmt.Sprintf("%s; memory.used parse failed: %v", s.Error, err)
+	}
+
+	if val, err := parseIntField(parts[coreOffset+3]); err == nil {
+		s.VramTotalMB = val
+		s.VramTotalValid = true
+	} else {
+		s.Error = fmt.Sprintf("%s; memory.total parse failed: %v", s.Error, err)
+	}
+	if len(parts) < coreOffset+9 {
+		setDerivedMetrics(&s)
+		return s
+	}
+
+	if val, err := parseFloatField(parts[coreOffset+4]); err == nil {
 		s.PowerDrawW = val
 		s.PowerDrawValid = true
 	} else {
 		s.Error = fmt.Sprintf("%s; power.draw parse failed: %v", s.Error, err)
 	}
 
-	if val, err := parseFloatField(parts[5]); err == nil {
+	if val, err := parseFloatField(parts[coreOffset+5]); err == nil {
 		s.PowerLimitW = val
 		s.PowerLimitValid = true
 	} else {
 		s.Error = fmt.Sprintf("%s; power.limit parse failed: %v", s.Error, err)
 	}
 
-	if val, err := parseFloatField(parts[6]); err == nil {
+	if val, err := parseFloatField(parts[coreOffset+6]); err == nil {
 		s.ClockSmMHz = val
 		s.ClockSmValid = true
 	} else {
 		s.Error = fmt.Sprintf("%s; clocks.current.sm parse failed: %v", s.Error, err)
 	}
 
-	if val, err := parseFloatField(parts[7]); err == nil {
+	if val, err := parseFloatField(parts[coreOffset+7]); err == nil {
 		s.ClockMemMHz = val
 		s.ClockMemValid = true
 	} else {
 		s.Error = fmt.Sprintf("%s; clocks.current.memory parse failed: %v", s.Error, err)
 	}
 
-	s.ThrottleReasons = strings.TrimSpace(parts[8])
+	s.ThrottleReasons = strings.TrimSpace(parts[coreOffset+8])
 	s.ThrottleReasonsValid = true
 
 	setDerivedMetrics(&s)

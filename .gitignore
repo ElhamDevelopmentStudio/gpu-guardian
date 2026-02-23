@@ -30,3 +30,6 @@ workload-*.log
 # Temporary files
 *.tmp
 *~
+
+# Profile persistence store
+.guardian-profiles.json

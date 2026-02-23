@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,7 +23,7 @@ func TestControlLoopE2EWithMaxTicks(t *testing.T) {
 	telemetryLog := filepath.Join(tmpDir, "telemetry.log")
 
 	nvidiaScript := filepath.Join(tmpDir, "nvidia-smi")
-	script := "#!/bin/sh\nprintf '72, 35, 4096, 8192, 120.0, 160.0, 1500, 5000\\n'\n"
+	script := "#!/bin/sh\nprintf 'GPU-CONTROL,72, 35, 4096, 8192, 120.0, 160.0, 1500, 5000, power_cap\\n'\n"
 	if err := os.WriteFile(nvidiaScript, []byte(script), 0o755); err != nil {
 		t.Fatalf("failed to write fake nvidia-smi: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestCalibrationCommandOutputsProfile(t *testing.T) {
 	profilePath := filepath.Join(tmpDir, "calibration.json")
 
 	nvidiaScript := filepath.Join(tmpDir, "nvidia-smi")
-	script := "#!/bin/sh\nconc=\"${CONCURRENCY:-1}\"\ntemp=$((55 + conc * 4))\nprintf '%d, 80, %s, 5000, 120.0, 160.0, 1500, 5000, 0\\n' \"$temp\" \"$((1000 + conc * 20))\"\n"
+	script := "#!/bin/sh\nconc=\"${CONCURRENCY:-1}\"\ntemp=$((55 + conc * 4))\nprintf 'GPU-CALIB-%s,%d, 80, %s, 5000, 120.0, 160.0, 1500, 5000, 0\\n' \"$conc\" \"$temp\" \"$((1000 + conc * 20))\"\n"
 	if err := os.WriteFile(nvidiaScript, []byte(script), 0o755); err != nil {
 		t.Fatalf("failed to write fake nvidia-smi: %v", err)
 	}
@@ -124,6 +125,114 @@ func TestCalibrationCommandOutputsProfile(t *testing.T) {
 	}
 	if len(profile.Curve) != 3 {
 		t.Fatalf("expected 3-point thermal saturation curve, got %d", len(profile.Curve))
+	}
+}
+
+func TestControlLoadsProfileDefaults(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	nvidiaScript := filepath.Join(tmpDir, "nvidia-smi")
+	script := "#!/bin/sh\nconc=\"${CONCURRENCY:-1}\"\ntemp=$((55 + conc * 5))\nprintf 'GPU-E2E,%d, 80, 1024, 2048, 120.0, 160.0, 1500, 5000, 0\\n' \"$temp\"\n"
+	if err := os.WriteFile(nvidiaScript, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake nvidia-smi: %v", err)
+	}
+	if err := os.Chmod(nvidiaScript, 0o755); err != nil {
+		t.Fatalf("failed to chmod fake nvidia-smi: %v", err)
+	}
+
+	env := append([]string{}, os.Environ()...)
+	env = append(env, "PATH="+tmpDir+":"+os.Getenv("PATH"))
+
+	profilePath := filepath.Join(tmpDir, "profiles.json")
+	profileOutPath := filepath.Join(tmpDir, "calibration.json")
+	logPath := filepath.Join(tmpDir, "guardian.log")
+	telemetryLog := filepath.Join(tmpDir, "telemetry.log")
+	workloadLog := filepath.Join(tmpDir, "workload.log")
+
+	calibrate := execCommand(ctx, "go", "run", ".", "calibrate",
+		"--cmd", "while true; do echo workload; sleep 0.02; done",
+		"--min-concurrency", "1",
+		"--max-concurrency", "3",
+		"--concurrency-step", "1",
+		"--poll-interval-sec", "1",
+		"--calibration-step-duration-sec", "1",
+		"--step-samples", "4",
+		"--throughput-drop-ratio", "0.7",
+		"--hard-temp", "60",
+		"--workload-type", "integration-e2e",
+		"--profile-path", profilePath,
+		"--output", profileOutPath,
+		"--adapter-stop-timeout-sec", "1",
+	)
+	calibrate.Env = env
+	if out, err := calibrate.CombinedOutput(); err != nil {
+		t.Fatalf("calibration command failed: %v; out=%s", err, string(out))
+	}
+
+	profileRaw, err := os.ReadFile(profileOutPath)
+	if err != nil {
+		t.Fatalf("expected calibration output file at %s: %v", profileOutPath, err)
+	}
+	var profile struct {
+		SafeConcurrency int `json:"safe_concurrency_ceiling"`
+	}
+	if err := json.Unmarshal(profileRaw, &profile); err != nil {
+		t.Fatalf("decode calibration profile: %v", err)
+	}
+	if profile.SafeConcurrency <= 0 {
+		t.Fatalf("invalid safe concurrency from calibration profile: %d", profile.SafeConcurrency)
+	}
+
+	controlCmd := execCommand(ctx, "go", "run", ".", "control",
+		"--cmd", "while true; do echo workload; sleep 0.1; done",
+		"--poll-interval-sec", "1",
+		"--max-ticks", "1",
+		"--workload-type", "integration-e2e",
+		"--profile-path", profilePath,
+		"--log-file", logPath,
+		"--telemetry-log", telemetryLog,
+		"--workload-log", workloadLog,
+		"--adapter-stop-timeout-sec", "1",
+		"--throughput-floor-ratio", "1",
+		"--echo-workload-output=false",
+	)
+	controlCmd.Env = env
+	if out, err := controlCmd.CombinedOutput(); err != nil {
+		t.Fatalf("control command failed: %v; out=%s", err, string(out))
+	}
+
+	logRaw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("expected control log at %s: %v", logPath, err)
+	}
+
+	lines := strings.Split(string(logRaw), "\n")
+	foundStartLine := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode control log line: %v", err)
+		}
+		if entry["msg"] != "starting control loop" {
+			continue
+		}
+		foundStartLine = true
+		startRaw, ok := entry["start"].(float64)
+		if !ok {
+			t.Fatalf("expected start field in control start event: %#v", entry)
+		}
+		if int(startRaw) != profile.SafeConcurrency {
+			t.Fatalf("expected control start to use persisted safe concurrency %d, got %.0f", profile.SafeConcurrency, startRaw)
+		}
+		break
+	}
+	if !foundStartLine {
+		t.Fatalf("expected control log to include startup event")
 	}
 }
 

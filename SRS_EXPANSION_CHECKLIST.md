@@ -125,9 +125,17 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
        - `vram_per_load_unit_mb`
      - Outputs profile JSON to optional `--output` path (console always prints JSON).
 
-2. **[ ] FR-13 (Profile persistence)**
-   - Persist profiles keyed by `gpu_id + workload_type`.
-   - Load profile automatically on next session start.
+2. **[x] FR-13 (Profile persistence)**
+   - Implemented: profiles are now persisted by GPU UUID + workload type.
+   - Implemented:
+     - Calibration writes profile payload to `--profile-path` (default `.guardian-profiles.json`).
+     - Control resolves active profile from telemetry GPU UUID and applies:
+       - `safe_concurrency_ceiling` -> `start_concurrency` when not explicitly set
+       - `baseline_throughput` -> engine initial baseline
+   - Added tests:
+     - `internal/calibration/store_test.go` (`TestLoadProfileReturnsMissingForNoStore`, `TestSaveAndLoadProfileByGPUAndWorkload`, `TestSaveProfileDefaultsUnknownKeys`)
+     - `internal/telemetry/telemetry_test.go` (UUID parsing + fallback validation updates)
+     - `cmd/guardian/main_test.go` (`TestControlLoadsProfileDefaults`)
 
 3. **[ ] FR-21 + FR-22 (Action/telemetry/decision logging + reports)**
    - Enforce structured logs for telemetry, actions, parameter updates, throughput, decisions.

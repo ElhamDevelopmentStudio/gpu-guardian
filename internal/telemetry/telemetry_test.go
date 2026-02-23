@@ -15,7 +15,7 @@ func TestCollectorParsesExtendedTelemetryFields(t *testing.T) {
 	originalRunner := runNvidiaSMICommand
 	runNvidiaSMICommand = func(_ context.Context, query string) ([]byte, error) {
 		if strings.Contains(query, "clocks_throttle_reasons.active") {
-			return []byte("64, 42.0, 5120, 10240, 210.5, 300.0, 1750.0, 8100.0, power_cap"), nil
+			return []byte("GPU-123,64, 42.0, 5120, 10240, 210.5, 300.0, 1750.0, 8100.0, power_cap"), nil
 		}
 		return []byte("64, 42.0, 5120, 10240"), nil
 	}
@@ -39,6 +39,9 @@ func TestCollectorParsesExtendedTelemetryFields(t *testing.T) {
 	}
 	if !s.ThrottleReasonsValid || s.ThrottleReasons != "power_cap" {
 		t.Fatalf("expected throttle reasons parse, got %#v", s)
+	}
+	if !s.GPUUUIDValid || s.GPUUUID != "GPU-123" {
+		t.Fatalf("expected gpu uuid parse, got %#v", s)
 	}
 }
 

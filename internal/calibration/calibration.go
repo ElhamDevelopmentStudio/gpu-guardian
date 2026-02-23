@@ -56,6 +56,8 @@ type CalibrationPoint struct {
 // Profile contains the calibration output used by later profile persistence work.
 type Profile struct {
 	Command                string             `json:"command"`
+	WorkloadType           string             `json:"workload_type"`
+	GPUUUID                string             `json:"gpu_uuid"`
 	MeasuredAt             time.Time          `json:"measured_at"`
 	BaselineConcurrency    int                `json:"baseline_concurrency"`
 	BaselineThroughput     float64            `json:"baseline_throughput"`

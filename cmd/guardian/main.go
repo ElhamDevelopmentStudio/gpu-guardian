@@ -24,6 +24,8 @@ import (
 )
 
 const mvpConfigPath = ".guardian-mvp.json"
+const defaultProfilePath = calibration.DefaultProfileStorePath
+const defaultWorkloadType = calibration.DefaultProfileWorkloadType
 
 var daemonBaseURL = "http://" + daemon.DefaultListenAddress
 
@@ -54,7 +56,10 @@ type Config struct {
 	LogMaxSizeMB                     int     `json:"log_max_size_mb"`
 	WorkloadLogPath                  string  `json:"workload_log_path"`
 	EchoWorkloadOutput               bool    `json:"echo_workload_output"`
+	InitialBaselineThroughput        float64 `json:"-"`
 	MaxTicks                         int     `json:"-"`
+	ProfilePath                      string  `json:"-"`
+	WorkloadType                     string  `json:"-"`
 }
 
 func defaultConfig() Config {
@@ -88,9 +93,17 @@ func defaultConfig() Config {
 
 func loadConfigFile(path string) (Config, error) {
 	cfg := defaultConfig()
-	if path == "" {
+	if path == "" || path == mvpConfigPath {
+		if b, err := os.ReadFile(path); err == nil {
+			if err := json.Unmarshal(b, &cfg); err != nil {
+				return Config{}, err
+			}
+		} else if !os.IsNotExist(err) {
+			return Config{}, err
+		}
 		return cfg, nil
 	}
+
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
@@ -199,6 +212,70 @@ func normalizeConfig(cfg *Config) error {
 	return nil
 }
 
+type telemetrySampler interface {
+	Sample(context.Context) telemetry.TelemetrySample
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+func applyProfileDefaults(
+	ctx context.Context,
+	cfg *Config,
+	workloadType string,
+	profilePath string,
+	startConcurrencyExplicit bool,
+) (bool, error) {
+	return applyProfileDefaultsWithSampler(ctx, cfg, workloadType, profilePath, startConcurrencyExplicit, telemetry.NewCollector())
+}
+
+func applyProfileDefaultsWithSampler(
+	ctx context.Context,
+	cfg *Config,
+	workloadType string,
+	profilePath string,
+	startConcurrencyExplicit bool,
+	sampler telemetrySampler,
+) (bool, error) {
+	if cfg == nil {
+		return false, nil
+	}
+	if sampler == nil {
+		sampler = telemetry.NewCollector()
+	}
+	if strings.TrimSpace(profilePath) == "" {
+		return false, nil
+	}
+	sample := sampler.Sample(ctx)
+	gpuID := sample.GPUUUID
+	if !sample.GPUUUIDValid {
+		gpuID = calibration.UnknownProfileGPUID
+	}
+
+	profile, found, err := calibration.LoadProfile(profilePath, gpuID, workloadType)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+
+	if profile.BaselineThroughput > 0 {
+		cfg.InitialBaselineThroughput = profile.BaselineThroughput
+	}
+	if !startConcurrencyExplicit && profile.SafeConcurrencyCeiling > 0 {
+		cfg.StartConcurrency = clampInt(profile.SafeConcurrencyCeiling, cfg.MinConcurrency, cfg.MaxConcurrency)
+	}
+	return true, nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -280,6 +357,8 @@ func runControl(args []string) error {
 	workloadLog := fs.String("workload-log", cfg.WorkloadLogPath, "Path for raw workload stdout/stderr log")
 	echoOutput := fs.Bool("echo-workload-output", cfg.EchoWorkloadOutput, "Echo workload output to console")
 	maxTicks := fs.Int("max-ticks", 0, "Internal limit for control loop iterations (0 means unlimited)")
+	profilePath := fs.String("profile-path", defaultProfilePath, "Profile store to restore workload baseline/concurrency defaults from")
+	workloadType := fs.String("workload-type", defaultWorkloadType, "Workload type key used for profile restore")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -311,9 +390,28 @@ func runControl(args []string) error {
 	cfg.WorkloadLogPath = *workloadLog
 	cfg.EchoWorkloadOutput = *echoOutput
 	cfg.MaxTicks = *maxTicks
+	cfg.ProfilePath = strings.TrimSpace(*profilePath)
+	cfg.WorkloadType = strings.TrimSpace(*workloadType)
+	if cfg.WorkloadType == "" {
+		cfg.WorkloadType = defaultWorkloadType
+	}
+
+	startConcExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "start-concurrency" {
+			startConcExplicit = true
+		}
+	})
 
 	if err := normalizeConfig(&cfg); err != nil {
 		return err
+	}
+	loadedProfile, err := applyProfileDefaults(context.Background(), &cfg, cfg.WorkloadType, cfg.ProfilePath, startConcExplicit)
+	if err != nil {
+		return fmt.Errorf("load profile: %w", err)
+	}
+	if loadedProfile {
+		// intentionally continue; these defaults are used by both daemon and local engine startup paths
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -347,13 +445,14 @@ func runControlLocal(ctx context.Context, cfg Config) error {
 	defer log.Close()
 
 	log.Info("starting control loop", map[string]interface{}{
-		"command":      cfg.Command,
-		"poll_seconds": cfg.PollIntervalSec,
-		"min":          cfg.MinConcurrency,
-		"max":          cfg.MaxConcurrency,
-		"start":        cfg.StartConcurrency,
-		"soft_temp":    cfg.SoftTemp,
-		"hard_temp":    cfg.HardTemp,
+		"command":                     cfg.Command,
+		"poll_seconds":                cfg.PollIntervalSec,
+		"min":                         cfg.MinConcurrency,
+		"max":                         cfg.MaxConcurrency,
+		"start":                       cfg.StartConcurrency,
+		"soft_temp":                   cfg.SoftTemp,
+		"hard_temp":                   cfg.HardTemp,
+		"initial_baseline_throughput": cfg.InitialBaselineThroughput,
 	})
 
 	controlCfg := control.RuleConfig{
@@ -384,21 +483,22 @@ func runControlLocal(ctx context.Context, cfg Config) error {
 	th := throughput.NewTracker(time.Duration(cfg.ThroughputWindowSec)*time.Second, time.Duration(cfg.BaselineWindowSec)*time.Second)
 
 	engineCfg := engine.Config{
-		Command:               cfg.Command,
-		PollInterval:          time.Duration(cfg.PollIntervalSec) * time.Second,
-		SoftTemp:              cfg.SoftTemp,
-		HardTemp:              cfg.HardTemp,
-		MinConcurrency:        cfg.MinConcurrency,
-		MaxConcurrency:        cfg.MaxConcurrency,
-		StartConcurrency:      cfg.StartConcurrency,
-		ThroughputFloorRatio:  cfg.ThroughputFloorRatio,
-		AdjustmentCooldown:    time.Duration(cfg.AdjustmentCooldownSec) * time.Second,
-		ThroughputWindow:      time.Duration(cfg.ThroughputWindowSec) * time.Second,
-		ThroughputFloorWindow: time.Duration(cfg.ThroughputFloorWindowSec) * time.Second,
-		BaselineWindow:        time.Duration(cfg.BaselineWindowSec) * time.Second,
-		MaxConcurrencyStep:    cfg.MaxConcurrencyStep,
-		TelemetryLogPath:      cfg.TelemetryLogPath,
-		MaxTicks:              cfg.MaxTicks,
+		Command:                   cfg.Command,
+		PollInterval:              time.Duration(cfg.PollIntervalSec) * time.Second,
+		SoftTemp:                  cfg.SoftTemp,
+		HardTemp:                  cfg.HardTemp,
+		MinConcurrency:            cfg.MinConcurrency,
+		MaxConcurrency:            cfg.MaxConcurrency,
+		StartConcurrency:          cfg.StartConcurrency,
+		ThroughputFloorRatio:      cfg.ThroughputFloorRatio,
+		AdjustmentCooldown:        time.Duration(cfg.AdjustmentCooldownSec) * time.Second,
+		ThroughputWindow:          time.Duration(cfg.ThroughputWindowSec) * time.Second,
+		ThroughputFloorWindow:     time.Duration(cfg.ThroughputFloorWindowSec) * time.Second,
+		BaselineWindow:            time.Duration(cfg.BaselineWindowSec) * time.Second,
+		MaxConcurrencyStep:        cfg.MaxConcurrencyStep,
+		TelemetryLogPath:          cfg.TelemetryLogPath,
+		MaxTicks:                  cfg.MaxTicks,
+		InitialBaselineThroughput: cfg.InitialBaselineThroughput,
 	}
 
 	eng := engine.New(
@@ -432,6 +532,8 @@ func runCalibration(args []string) error {
 	workloadLog := fs.String("workload-log", "", "Path for raw workload stdout/stderr log")
 	stopTimeout := fs.Int("adapter-stop-timeout-sec", cfg.AdapterStopTimeoutSec, "Graceful stop timeout in seconds")
 	outputPath := fs.String("output", "", "Write calibration profile JSON to this path")
+	profilePath := fs.String("profile-path", defaultProfilePath, "Profile store used for later profile restore")
+	workloadType := fs.String("workload-type", defaultWorkloadType, "Workload type key used for profile persistence")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -479,6 +581,8 @@ func runCalibration(args []string) error {
 		StopTimeout: time.Duration(*stopTimeout) * time.Second,
 	}
 	aw := adapter.NewXttsAdapter(adapterCfg)
+	telemetryCollector := telemetry.NewCollector()
+	gpuSample := telemetryCollector.Sample(ctx)
 
 	calCfg := calibration.Config{
 		Command:             cfg.Command,
@@ -493,9 +597,20 @@ func runCalibration(args []string) error {
 		ThroughputDropRatio: *throughputDrop,
 	}
 
-	profile, err := calibration.Run(ctx, calCfg, aw, telemetry.NewCollector())
+	profile, err := calibration.Run(ctx, calCfg, aw, telemetryCollector)
 	if err != nil {
 		return fmt.Errorf("calibration failed: %w", err)
+	}
+	profile.GPUUUID = ""
+	if gpuSample.GPUUUIDValid {
+		profile.GPUUUID = gpuSample.GPUUUID
+	}
+	profile.WorkloadType = strings.TrimSpace(*workloadType)
+	if profile.WorkloadType == "" {
+		profile.WorkloadType = defaultWorkloadType
+	}
+	if err := calibration.SaveProfile(*profilePath, profile.GPUUUID, profile.WorkloadType, profile); err != nil {
+		return fmt.Errorf("persist profile: %w", err)
 	}
 
 	payload, err := json.MarshalIndent(profile, "", "  ")
@@ -552,6 +667,7 @@ func startDaemonSession(cfg Config) (string, error) {
 		WorkloadLogPath:                  cfg.WorkloadLogPath,
 		EchoWorkloadOutput:               cfg.EchoWorkloadOutput,
 		MaxTicks:                         cfg.MaxTicks,
+		InitialBaselineThroughput:        cfg.InitialBaselineThroughput,
 	}
 
 	body, err := json.Marshal(req)
