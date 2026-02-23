@@ -1,0 +1,32 @@
+# Build outputs
+/guardian
+/guardian.exe
+/build/
+/dist/
+/tmp/
+*.out
+*.test
+
+# Go workspace/build artifacts
+/bin/
+*.cover
+coverage.txt
+coverage.html
+*.prof
+
+# Runtime/log artifacts
+*.log
+workload.log
+workload-*.log
+
+# IDE/editor artifacts
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+
+# Temporary files
+*.tmp
+*~

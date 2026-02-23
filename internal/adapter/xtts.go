@@ -25,8 +25,6 @@ type WorkloadAdapter interface {
 	GetPID() int
 }
 
-const AdapterVersion = "v1"
-
 type Config struct {
 	OutputPath  string
 	StopTimeout time.Duration
@@ -74,6 +72,10 @@ func NewXttsAdapter(cfg Config) *XTTSAdapter {
 		outputPath:  cfg.OutputPath,
 		concurrency: 1,
 	}
+}
+
+func (a *XTTSAdapter) AdapterAPIVersion() string {
+	return AdapterInterfaceVersion
 }
 
 func (a *XTTSAdapter) ensureOutputFileLocked() error {

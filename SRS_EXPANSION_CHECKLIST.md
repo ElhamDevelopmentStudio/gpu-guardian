@@ -22,7 +22,7 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
    - Implement/confirm engine package boundaries and entrypoint contracts in Go as the single source of truth.
    - Deliverable: `internal/engine` with explicit state transitions and policy orchestration.
 
-2. **[ ] FR-10 + FR-8 + FR-9 (Versioned adapter contract + XTTS adapter in v1)**
+2. **[x] FR-10 + FR-8 + FR-9 (Versioned adapter contract + XTTS adapter in v1)**
    - Define adapter interface with: `Start`, `Pause`, `Resume`, `UpdateParameters`, `GetThroughput`, `GetProgress`.
    - Implement stable XTTS adapter that satisfies v1 of this interface.
    - Deliverable: interface version tag and adapter compatibility checks.
