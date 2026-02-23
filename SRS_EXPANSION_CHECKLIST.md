@@ -218,10 +218,14 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
 
 ## P5 — Non-functional, reliability, and release hardening
 
-1. **[ ] Performance (NFR-8.1)**
+1. **[x] Performance (NFR-8.1)**
    - Telemetry overhead ≤ 1%.
+   - Added `internal/telemetry/performance_test.go` with `TestCollectorSampleLatencyBudget` (`p95 <= 20ms` with mocked telemetry source for 2s poll interval).
    - Typical decision latency ≤ 50ms.
-   - Add benchmark tests + measurement gating.
+   - Added `internal/control/performance_test.go` with `TestRuleDecisionLatencyBudget` (`p95 <= 50ms`).
+   - Added benchmark coverage:
+     - `BenchmarkCollectorSampleLatency`
+     - `BenchmarkRuleDecisionLatency`
 
 2. **[ ] Reliability (NFR-8.2)**
    - Harden for long-duration stability (72h target).
