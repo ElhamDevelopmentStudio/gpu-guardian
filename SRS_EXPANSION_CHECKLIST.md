@@ -202,8 +202,19 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
    - `python/src/gpu_guardian/client.py` (daemon client defaulting to `http://127.0.0.1:8090/v1`)
    - Tests: `python/tests/test_resolver.py`, `python/tests/test_client.py`
 
-3. **[ ] CLI-1 + DR-3 (ecosystem clients integration policy)**
-   - Clients communicate to daemon on localhost by default using same API contract.
+3. **[x] CLI-1 + DR-3 (ecosystem clients integration policy)**
+   - Added canonical API contract artifact for wrapper clients: `ecosystem_client_api_contract.json`.
+   - Added contract-backed tests for Node and Python clients to validate:
+     - Default localhost daemon base (`http://127.0.0.1:8090/v1`)
+     - Environment override via `GUARDIAN_DAEMON_BASE_URL`
+     - `/v1` route usage for health, metrics, sessions, control
+     - Session path template parity (e.g., `{session}` placeholder)
+   - Clients now include explicit assertions through tests for consistent localhost-first daemon communication.
+   - Added coverage:
+     - `npm/test/client.test.js`
+     - `python/tests/test_client.py`
+   - Shared contract file source:
+     - `ecosystem_client_api_contract.json`
 
 ## P5 — Non-functional, reliability, and release hardening
 

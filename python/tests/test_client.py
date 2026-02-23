@@ -1,8 +1,14 @@
 import json
+from pathlib import Path
 import threading
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from gpu_guardian.client import DEFAULT_DAEMON_BASE_URL, GuardianClient
+
+CONTRACT_PATH = Path(__file__).resolve().parents[1].parent / "ecosystem_client_api_contract.json"
+with open(CONTRACT_PATH, "r", encoding="utf-8") as fp:
+    CONTRACT = json.load(fp)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -58,6 +64,13 @@ class _Handler(BaseHTTPRequestHandler):
     return
 
 
+def _contract_path(routes, name, **kwargs):
+  route_path = routes[name]["path"]
+  for key, value in kwargs.items():
+    route_path = route_path.replace(f"{{{key}}}", str(value))
+  return route_path
+
+
 def _build_server():
   routes = {
     ("GET", "/v1/health"): {"status": 200, "body": {"status": "ok"}},
@@ -96,7 +109,13 @@ def run(name, fn):
 def test_client_contract():
   server, port, handler = _build_server()
   try:
-    assert DEFAULT_DAEMON_BASE_URL.startswith("http://127.0.0.1")
+    api = CONTRACT["daemon_api"]
+    assert DEFAULT_DAEMON_BASE_URL == api["default_base_url"]
+
+    os.environ["GUARDIAN_DAEMON_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
+    env_client = GuardianClient()
+    assert env_client.base_url == os.environ["GUARDIAN_DAEMON_BASE_URL"]
+
     client = GuardianClient(base_url=f"http://127.0.0.1:{port}/v1")
 
     assert client.health() == {"status": "ok"}
@@ -110,7 +129,7 @@ def test_client_contract():
       "reason": "started",
     }
     assert handler.last_call == {
-      "url": "/v1/sessions",
+      "url": _contract_path(api["routes"], "start_session"),
       "method": "POST",
       "payload": {"command": "python generate_xtts.py"},
     }
@@ -120,20 +139,24 @@ def test_client_contract():
       "reason": "stopped",
     }
     assert handler.last_call == {
-      "url": "/v1/sessions/default/stop",
+      "url": _contract_path(api["routes"], "stop_session", session="default"),
       "method": "POST",
       "payload": {},
     }
 
     assert client.control("stop") == {"session_id": "default", "reason": "stopped"}
     assert handler.last_call == {
-      "url": "/v1/control",
+      "url": _contract_path(api["routes"], "control"),
       "method": "POST",
       "payload": {"action": "stop"},
     }
+    assert handler.last_call["method"] == api["routes"]["control"]["method"]
+    assert api["routes"]["metrics"]["path"] == f"/{api['api_version']}/metrics"
+    assert api["routes"]["health"]["method"] == "GET"
   finally:
     server.shutdown()
     server.server_close()
+    os.environ.pop("GUARDIAN_DAEMON_BASE_URL", None)
 
 
 def main():

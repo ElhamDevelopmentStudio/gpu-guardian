@@ -31,6 +31,9 @@ guardian observe --session-id default --telemetry
 - `GUARDIAN_DAEMON_BASE_URL`: override daemon base URL for the JS client
   (default: `http://127.0.0.1:8090/v1`).
 
+Clients use the shared wrapper contract from `ecosystem_client_api_contract.json`:
+`/v1/health`, `/v1/metrics`, `/v1/sessions`, `/v1/control`.
+
 ## JS API
 
 ```js

@@ -23,6 +23,7 @@ rule-based control loop to adjust concurrency.
 - `npm/` CLI wrapper package + optional JS client integration
 - `python/` packaging scaffold for `pip` wrapper + Python API client
 - `simulate` mode for deterministic offline replay/what-if policy runs
+- Shared API contract file for wrappers: `ecosystem_client_api_contract.json`
 - No RL
 - No multi-GPU or multi-OS support
 

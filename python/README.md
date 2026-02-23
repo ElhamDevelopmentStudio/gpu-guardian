@@ -23,6 +23,9 @@ guardian control --cmd "python generate_xtts.py"
 - `GUARDIAN_BINARY_URL`: explicit binary URL override
 - `GUARDIAN_DAEMON_BASE_URL`: daemon base URL override (defaults to `http://127.0.0.1:8090/v1`)
 
+The Python client follows the same daemon contract as the Go CLI and Node wrapper:
+`/v1/health`, `/v1/metrics`, `/v1/sessions`, and `/v1/control`.
+
 ## Python API
 
 ```python

@@ -1,10 +1,27 @@
 const assert = require("node:assert");
 const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   GuardianClient,
   DEFAULT_DAEMON_BASE_URL,
 } = require("../lib/client");
+
+const contract = JSON.parse(
+  fs.readFileSync(
+    path.join(__dirname, "..", "..", "ecosystem_client_api_contract.json"),
+    "utf8"
+  )
+);
+
+const api = contract.daemon_api;
+function contractPath(name, vars = {}) {
+  return Object.entries(vars).reduce(
+    (value, [key, next]) => value.replace(`{${key}}`, String(next)),
+    api.routes[name].path
+  );
+}
 
 function createServer(routes, onRequest) {
   return new Promise((resolve, reject) => {
@@ -85,8 +102,31 @@ async function main() {
 
   const client = new GuardianClient({ baseUrl: `http://127.0.0.1:${port}/v1` });
   assert.ok(
-    DEFAULT_DAEMON_BASE_URL.startsWith("http://127.0.0.1"),
-    "expected localhost default base URL"
+    DEFAULT_DAEMON_BASE_URL === api.default_base_url,
+    `expected default base URL ${api.default_base_url}`
+  );
+  assert.ok(
+    DEFAULT_DAEMON_BASE_URL.endsWith(`/${api.api_version}`),
+    "default base URL should target v1 API"
+  );
+
+  process.env.GUARDIAN_DAEMON_BASE_URL = `http://127.0.0.1:${port}/v1`;
+  const envClient = new GuardianClient();
+  assert.strictEqual(
+    envClient.baseUrl,
+    process.env.GUARDIAN_DAEMON_BASE_URL,
+    "environment override should be honored"
+  );
+
+  assert.strictEqual(
+    api.routes.health.path,
+    "/v1/health",
+    "contract must require health route under v1"
+  );
+  assert.strictEqual(
+    api.routes.control.method,
+    "POST",
+    "contract should require POST for control"
   );
 
   const health = await client.health();
@@ -110,13 +150,17 @@ async function main() {
     method: "POST",
     payload: { command: "python generate_xtts.py" },
   });
+  assert.strictEqual(lastCall.url, api.routes.start_session.path);
+  assert.strictEqual(lastCall.method, api.routes.start_session.method);
 
   await client.stopSession();
   assert.deepStrictEqual(lastCall, {
-    url: "/v1/sessions/default/stop",
+    url: contractPath("stop_session", { session: "default" }),
     method: "POST",
     payload: {},
   });
+  assert.strictEqual(lastCall.url, contractPath("stop_session", { session: "default" }));
+  assert.strictEqual(lastCall.method, api.routes.stop_session.method);
 
   await client.control("stop");
   assert.deepStrictEqual(lastCall, {
@@ -124,6 +168,14 @@ async function main() {
     method: "POST",
     payload: { action: "stop" },
   });
+  assert.strictEqual(lastCall.url, api.routes.control.path);
+  assert.strictEqual(lastCall.method, api.routes.control.method);
+  assert.strictEqual(
+    api.routes.metrics.path,
+    `/${api.api_version}/metrics`
+  );
+
+  delete process.env.GUARDIAN_DAEMON_BASE_URL;
 
   server.close();
   console.log("ok - guardian js client");
