@@ -27,53 +27,61 @@ const mvpConfigPath = ".guardian-mvp.json"
 var daemonBaseURL = "http://" + daemon.DefaultListenAddress
 
 type Config struct {
-	Command                  string  `json:"command"`
-	PollIntervalSec          int     `json:"poll_interval_sec"`
-	SoftTemp                 float64 `json:"soft_temp"`
-	HardTemp                 float64 `json:"hard_temp"`
-	MinConcurrency           int     `json:"min_concurrency"`
-	MaxConcurrency           int     `json:"max_concurrency"`
-	StartConcurrency         int     `json:"start_concurrency"`
-	ThroughputFloorRatio     float64 `json:"throughput_floor_ratio"`
-	AdjustmentCooldownSec    int     `json:"adjustment_cooldown_sec"`
-	TempHysteresisC          float64 `json:"temp_hysteresis_c"`
-	ThroughputRecoveryMargin float64 `json:"throughput_recovery_margin"`
-	MemoryPressureLimit      float64 `json:"memory_pressure_limit"`
-	ThrottleRiskLimit        float64 `json:"throttle_risk_limit"`
-	BaselineWindowSec        int     `json:"baseline_window_sec"`
-	ThroughputWindowSec      int     `json:"throughput_window_sec"`
-	ThroughputFloorWindowSec int     `json:"throughput_floor_window_sec"`
-	AdapterStopTimeoutSec    int     `json:"adapter_stop_timeout_sec"`
-	MaxConcurrencyStep       int     `json:"max_concurrency_step"`
-	LogPath                  string  `json:"log_file"`
-	LogMaxSizeMB             int     `json:"log_max_size_mb"`
-	WorkloadLogPath          string  `json:"workload_log_path"`
-	EchoWorkloadOutput       bool    `json:"echo_workload_output"`
-	MaxTicks                 int     `json:"-"`
+	Command                          string  `json:"command"`
+	PollIntervalSec                  int     `json:"poll_interval_sec"`
+	SoftTemp                         float64 `json:"soft_temp"`
+	HardTemp                         float64 `json:"hard_temp"`
+	MinConcurrency                   int     `json:"min_concurrency"`
+	MaxConcurrency                   int     `json:"max_concurrency"`
+	StartConcurrency                 int     `json:"start_concurrency"`
+	ThroughputFloorRatio             float64 `json:"throughput_floor_ratio"`
+	ThroughputSlowdownFloorRatio     float64 `json:"throughput_slowdown_floor_ratio"`
+	AdjustmentCooldownSec            int     `json:"adjustment_cooldown_sec"`
+	TempHysteresisC                  float64 `json:"temp_hysteresis_c"`
+	ThroughputRecoveryMargin         float64 `json:"throughput_recovery_margin"`
+	ThroughputRecoveryMaxAttempts    int     `json:"throughput_recovery_max_attempts"`
+	ThroughputRecoveryStepMultiplier int     `json:"throughput_recovery_step_multiplier"`
+	MemoryPressureLimit              float64 `json:"memory_pressure_limit"`
+	ThrottleRiskLimit                float64 `json:"throttle_risk_limit"`
+	TelemetryLogPath                 string  `json:"telemetry_log_path"`
+	BaselineWindowSec                int     `json:"baseline_window_sec"`
+	ThroughputWindowSec              int     `json:"throughput_window_sec"`
+	ThroughputFloorWindowSec         int     `json:"throughput_floor_window_sec"`
+	AdapterStopTimeoutSec            int     `json:"adapter_stop_timeout_sec"`
+	MaxConcurrencyStep               int     `json:"max_concurrency_step"`
+	LogPath                          string  `json:"log_file"`
+	LogMaxSizeMB                     int     `json:"log_max_size_mb"`
+	WorkloadLogPath                  string  `json:"workload_log_path"`
+	EchoWorkloadOutput               bool    `json:"echo_workload_output"`
+	MaxTicks                         int     `json:"-"`
 }
 
 func defaultConfig() Config {
 	return Config{
-		PollIntervalSec:          2,
-		SoftTemp:                 78,
-		HardTemp:                 84,
-		MinConcurrency:           1,
-		MaxConcurrency:           8,
-		StartConcurrency:         4,
-		ThroughputFloorRatio:     0.7,
-		AdjustmentCooldownSec:    10,
-		TempHysteresisC:          2,
-		ThroughputRecoveryMargin: 0.05,
-		MemoryPressureLimit:      0.9,
-		ThrottleRiskLimit:        0.85,
-		BaselineWindowSec:        120,
-		ThroughputWindowSec:      30,
-		ThroughputFloorWindowSec: 30,
-		AdapterStopTimeoutSec:    5,
-		MaxConcurrencyStep:       1,
-		LogPath:                  "guardian.log",
-		LogMaxSizeMB:             50,
-		EchoWorkloadOutput:       false,
+		PollIntervalSec:                  2,
+		SoftTemp:                         78,
+		HardTemp:                         84,
+		MinConcurrency:                   1,
+		MaxConcurrency:                   8,
+		StartConcurrency:                 4,
+		ThroughputFloorRatio:             0.7,
+		ThroughputSlowdownFloorRatio:     0.5,
+		AdjustmentCooldownSec:            10,
+		TempHysteresisC:                  2,
+		ThroughputRecoveryMargin:         0.05,
+		ThroughputRecoveryMaxAttempts:    3,
+		ThroughputRecoveryStepMultiplier: 2,
+		MemoryPressureLimit:              0.9,
+		ThrottleRiskLimit:                0.85,
+		TelemetryLogPath:                 "telemetry.log",
+		BaselineWindowSec:                120,
+		ThroughputWindowSec:              30,
+		ThroughputFloorWindowSec:         30,
+		AdapterStopTimeoutSec:            5,
+		MaxConcurrencyStep:               1,
+		LogPath:                          "guardian.log",
+		LogMaxSizeMB:                     50,
+		EchoWorkloadOutput:               false,
 	}
 }
 
@@ -139,6 +147,9 @@ func normalizeConfig(cfg *Config) error {
 	if cfg.ThroughputFloorRatio <= 0 {
 		cfg.ThroughputFloorRatio = 0.7
 	}
+	if cfg.ThroughputSlowdownFloorRatio <= 0 || cfg.ThroughputSlowdownFloorRatio > cfg.ThroughputFloorRatio {
+		cfg.ThroughputSlowdownFloorRatio = 0.5
+	}
 	if cfg.TempHysteresisC < 0 {
 		cfg.TempHysteresisC = 2
 	}
@@ -148,11 +159,20 @@ func normalizeConfig(cfg *Config) error {
 	if cfg.ThroughputRecoveryMargin == 0 {
 		cfg.ThroughputRecoveryMargin = 0.05
 	}
+	if cfg.ThroughputRecoveryMaxAttempts <= 0 {
+		cfg.ThroughputRecoveryMaxAttempts = 3
+	}
+	if cfg.ThroughputRecoveryStepMultiplier <= 1 {
+		cfg.ThroughputRecoveryStepMultiplier = 2
+	}
 	if cfg.MemoryPressureLimit <= 0 {
 		cfg.MemoryPressureLimit = 0.9
 	}
 	if cfg.ThrottleRiskLimit <= 0 {
 		cfg.ThrottleRiskLimit = 0.85
+	}
+	if cfg.TelemetryLogPath == "" {
+		cfg.TelemetryLogPath = "telemetry.log"
 	}
 	if cfg.AdjustmentCooldownSec <= 0 {
 		cfg.AdjustmentCooldownSec = 10
@@ -234,10 +254,14 @@ func runControl(args []string) error {
 	maxConc := fs.Int("max-concurrency", cfg.MaxConcurrency, "Maximum concurrency")
 	startConc := fs.Int("start-concurrency", cfg.StartConcurrency, "Initial concurrency")
 	floor := fs.Float64("throughput-floor-ratio", cfg.ThroughputFloorRatio, "Throughput floor as fraction of baseline")
+	floorSlowdown := fs.Float64("throughput-slowdown-floor-ratio", cfg.ThroughputSlowdownFloorRatio, "Fallback throughput slowdown floor ratio (2x slowdown default is 0.5)")
 	tempHysteresis := fs.Float64("temp-hysteresis-c", cfg.TempHysteresisC, "Temperature debounce margin before scale-up")
 	tpRecovery := fs.Float64("throughput-recovery-margin", cfg.ThroughputRecoveryMargin, "Throughput recovery margin above floor before scale-up")
+	tpRecoveryAttempts := fs.Int("throughput-recovery-max-attempts", cfg.ThroughputRecoveryMaxAttempts, "Max aggressive recovery attempts before pause")
+	tpRecoveryMultiplier := fs.Int("throughput-recovery-step-multiplier", cfg.ThroughputRecoveryStepMultiplier, "Multiplier for aggressive recovery step")
 	memLimit := fs.Float64("memory-pressure-limit", cfg.MemoryPressureLimit, "Memory pressure limit above which to reduce load")
 	riskLimit := fs.Float64("throttle-risk-limit", cfg.ThrottleRiskLimit, "Throttle risk limit above which to reduce load")
+	telemetryLogPath := fs.String("telemetry-log", cfg.TelemetryLogPath, "Path for timestamped telemetry samples")
 	cooldown := fs.Int("adjustment-cooldown-sec", cfg.AdjustmentCooldownSec, "Action cooldown in seconds")
 	blWindow := fs.Int("baseline-window-sec", cfg.BaselineWindowSec, "Baseline warmup window in seconds")
 	tpWindow := fs.Int("throughput-window-sec", cfg.ThroughputWindowSec, "Throughput lookback window in seconds")
@@ -261,10 +285,14 @@ func runControl(args []string) error {
 	cfg.MaxConcurrency = *maxConc
 	cfg.StartConcurrency = *startConc
 	cfg.ThroughputFloorRatio = *floor
+	cfg.ThroughputSlowdownFloorRatio = *floorSlowdown
 	cfg.TempHysteresisC = *tempHysteresis
 	cfg.ThroughputRecoveryMargin = *tpRecovery
+	cfg.ThroughputRecoveryMaxAttempts = *tpRecoveryAttempts
+	cfg.ThroughputRecoveryStepMultiplier = *tpRecoveryMultiplier
 	cfg.MemoryPressureLimit = *memLimit
 	cfg.ThrottleRiskLimit = *riskLimit
+	cfg.TelemetryLogPath = *telemetryLogPath
 	cfg.AdjustmentCooldownSec = *cooldown
 	cfg.MaxConcurrencyStep = *maxStep
 	cfg.BaselineWindowSec = *blWindow
@@ -322,16 +350,19 @@ func runControlLocal(ctx context.Context, cfg Config) error {
 	})
 
 	controlCfg := control.RuleConfig{
-		SoftTemp:                 cfg.SoftTemp,
-		HardTemp:                 cfg.HardTemp,
-		ThroughputFloorRatio:     cfg.ThroughputFloorRatio,
-		ThroughputWindowSec:      cfg.ThroughputWindowSec,
-		ThroughputFloorSec:       cfg.ThroughputFloorWindowSec,
-		TempHysteresisC:          cfg.TempHysteresisC,
-		ThroughputRecoveryMargin: cfg.ThroughputRecoveryMargin,
-		MemoryPressureLimit:      cfg.MemoryPressureLimit,
-		ThrottleRiskLimit:        cfg.ThrottleRiskLimit,
-		MaxConcurrencyStep:       cfg.MaxConcurrencyStep,
+		SoftTemp:                         cfg.SoftTemp,
+		HardTemp:                         cfg.HardTemp,
+		ThroughputFloorRatio:             cfg.ThroughputFloorRatio,
+		ThroughputSlowdownFloorRatio:     cfg.ThroughputSlowdownFloorRatio,
+		ThroughputWindowSec:              cfg.ThroughputWindowSec,
+		ThroughputFloorSec:               cfg.ThroughputFloorWindowSec,
+		ThroughputRecoveryMaxAttempts:    cfg.ThroughputRecoveryMaxAttempts,
+		ThroughputRecoveryStepMultiplier: cfg.ThroughputRecoveryStepMultiplier,
+		TempHysteresisC:                  cfg.TempHysteresisC,
+		ThroughputRecoveryMargin:         cfg.ThroughputRecoveryMargin,
+		MemoryPressureLimit:              cfg.MemoryPressureLimit,
+		ThrottleRiskLimit:                cfg.ThrottleRiskLimit,
+		MaxConcurrencyStep:               cfg.MaxConcurrencyStep,
 	}
 	controller := control.NewRuleController(controlCfg)
 
@@ -359,6 +390,7 @@ func runControlLocal(ctx context.Context, cfg Config) error {
 		ThroughputFloorWindow: time.Duration(cfg.ThroughputFloorWindowSec) * time.Second,
 		BaselineWindow:        time.Duration(cfg.BaselineWindowSec) * time.Second,
 		MaxConcurrencyStep:    cfg.MaxConcurrencyStep,
+		TelemetryLogPath:      cfg.TelemetryLogPath,
 		MaxTicks:              cfg.MaxTicks,
 	}
 
@@ -395,25 +427,29 @@ func startViaDaemonIfAvailable(ctx context.Context, cfg Config) (bool, error) {
 
 func startDaemonSession(cfg Config) (string, error) {
 	req := daemon.StartRequest{
-		Command:                  cfg.Command,
-		PollIntervalSec:          cfg.PollIntervalSec,
-		SoftTemp:                 cfg.SoftTemp,
-		HardTemp:                 cfg.HardTemp,
-		MinConcurrency:           cfg.MinConcurrency,
-		MaxConcurrency:           cfg.MaxConcurrency,
-		StartConcurrency:         cfg.StartConcurrency,
-		ThroughputFloorRatio:     cfg.ThroughputFloorRatio,
-		AdjustmentCooldownSec:    cfg.AdjustmentCooldownSec,
-		BaselineWindowSec:        cfg.BaselineWindowSec,
-		ThroughputWindowSec:      cfg.ThroughputWindowSec,
-		ThroughputFloorWindowSec: cfg.ThroughputFloorWindowSec,
-		MaxConcurrencyStep:       cfg.MaxConcurrencyStep,
-		AdapterStopTimeoutSec:    cfg.AdapterStopTimeoutSec,
-		LogPath:                  cfg.LogPath,
-		LogMaxSizeMB:             cfg.LogMaxSizeMB,
-		WorkloadLogPath:          cfg.WorkloadLogPath,
-		EchoWorkloadOutput:       cfg.EchoWorkloadOutput,
-		MaxTicks:                 cfg.MaxTicks,
+		Command:                          cfg.Command,
+		PollIntervalSec:                  cfg.PollIntervalSec,
+		SoftTemp:                         cfg.SoftTemp,
+		HardTemp:                         cfg.HardTemp,
+		MinConcurrency:                   cfg.MinConcurrency,
+		MaxConcurrency:                   cfg.MaxConcurrency,
+		StartConcurrency:                 cfg.StartConcurrency,
+		ThroughputFloorRatio:             cfg.ThroughputFloorRatio,
+		ThroughputSlowdownFloorRatio:     cfg.ThroughputSlowdownFloorRatio,
+		AdjustmentCooldownSec:            cfg.AdjustmentCooldownSec,
+		ThroughputRecoveryMaxAttempts:    cfg.ThroughputRecoveryMaxAttempts,
+		ThroughputRecoveryStepMultiplier: cfg.ThroughputRecoveryStepMultiplier,
+		TelemetryLogPath:                 cfg.TelemetryLogPath,
+		BaselineWindowSec:                cfg.BaselineWindowSec,
+		ThroughputWindowSec:              cfg.ThroughputWindowSec,
+		ThroughputFloorWindowSec:         cfg.ThroughputFloorWindowSec,
+		MaxConcurrencyStep:               cfg.MaxConcurrencyStep,
+		AdapterStopTimeoutSec:            cfg.AdapterStopTimeoutSec,
+		LogPath:                          cfg.LogPath,
+		LogMaxSizeMB:                     cfg.LogMaxSizeMB,
+		WorkloadLogPath:                  cfg.WorkloadLogPath,
+		EchoWorkloadOutput:               cfg.EchoWorkloadOutput,
+		MaxTicks:                         cfg.MaxTicks,
 	}
 
 	body, err := json.Marshal(req)

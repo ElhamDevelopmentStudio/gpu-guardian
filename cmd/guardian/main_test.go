@@ -18,6 +18,7 @@ func TestControlLoopE2EWithMaxTicks(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "guardian.log")
 	workloadLog := filepath.Join(tmpDir, "workload.log")
+	telemetryLog := filepath.Join(tmpDir, "telemetry.log")
 
 	nvidiaScript := filepath.Join(tmpDir, "nvidia-smi")
 	script := "#!/bin/sh\nprintf '72, 35, 4096, 8192, 120.0, 160.0, 1500, 5000\\n'\n"
@@ -36,6 +37,7 @@ func TestControlLoopE2EWithMaxTicks(t *testing.T) {
 		"--poll-interval-sec", "1",
 		"--max-ticks", "2",
 		"--log-file", logPath,
+		"--telemetry-log", telemetryLog,
 		"--workload-log", workloadLog,
 		"--adapter-stop-timeout-sec", "1",
 		"--echo-workload-output=false",
@@ -54,6 +56,9 @@ func TestControlLoopE2EWithMaxTicks(t *testing.T) {
 	}
 	if _, err := os.Stat(workloadLog); err != nil {
 		t.Fatalf("expected workload log at %s: %v", workloadLog, err)
+	}
+	if _, err := os.Stat(telemetryLog); err != nil {
+		t.Fatalf("expected telemetry log at %s: %v", telemetryLog, err)
 	}
 }
 

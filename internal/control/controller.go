@@ -32,6 +32,7 @@ type State struct {
 	MaxConcurrency     int
 	BaselineThroughput float64
 	LastActionAt       time.Time
+	Estimate           StateEstimate
 }
 
 type Controller interface {
@@ -39,43 +40,54 @@ type Controller interface {
 }
 
 type RuleConfig struct {
-	SoftTemp                 float64
-	HardTemp                 float64
-	ThroughputFloorRatio     float64
-	ThroughputWindowSec      int
-	ThroughputFloorSec       int
-	TempHysteresisC          float64
-	ThroughputRecoveryMargin float64
-	MemoryPressureLimit      float64
-	ThrottleRiskLimit        float64
-	MaxConcurrencyStep       int
+	SoftTemp                         float64
+	HardTemp                         float64
+	ThroughputFloorRatio             float64
+	ThroughputWindowSec              int
+	ThroughputFloorSec               int
+	ThroughputSlowdownFloorRatio     float64
+	ThroughputRecoveryMaxAttempts    int
+	ThroughputRecoveryStepMultiplier int
+	TempHysteresisC                  float64
+	ThroughputRecoveryMargin         float64
+	MemoryPressureLimit              float64
+	ThrottleRiskLimit                float64
+	MaxConcurrencyStep               int
 }
 
 type RuleController struct {
-	SoftTemp                 float64
-	HardTemp                 float64
-	ThroughputFloorRatio     float64
-	ThroughputWindow         time.Duration
-	ThroughputFloorWindow    time.Duration
-	TempHysteresisC          float64
-	ThroughputRecoveryMargin float64
-	MemoryPressureLimit      float64
-	ThrottleRiskLimit        float64
-	MaxConcurrencyStep       int
+	SoftTemp                         float64
+	HardTemp                         float64
+	ThroughputFloorRatio             float64
+	ThroughputWindow                 time.Duration
+	ThroughputFloorWindow            time.Duration
+	ThroughputSlowdownFloorRatio     float64
+	ThroughputRecoveryMaxAttempts    int
+	ThroughputRecoveryStepMultiplier int
+	TempHysteresisC                  float64
+	ThroughputRecoveryMargin         float64
+	MemoryPressureLimit              float64
+	ThrottleRiskLimit                float64
+	MaxConcurrencyStep               int
+
+	throughputRecoveryAttempts int
 }
 
 func NewRuleController(cfg RuleConfig) *RuleController {
 	return &RuleController{
-		SoftTemp:                 cfg.SoftTemp,
-		HardTemp:                 cfg.HardTemp,
-		ThroughputFloorRatio:     cfg.ThroughputFloorRatio,
-		ThroughputWindow:         time.Duration(cfg.ThroughputWindowSec) * time.Second,
-		ThroughputFloorWindow:    time.Duration(cfg.ThroughputFloorSec) * time.Second,
-		TempHysteresisC:          cfg.TempHysteresisC,
-		ThroughputRecoveryMargin: cfg.ThroughputRecoveryMargin,
-		MemoryPressureLimit:      cfg.MemoryPressureLimit,
-		ThrottleRiskLimit:        cfg.ThrottleRiskLimit,
-		MaxConcurrencyStep:       cfg.MaxConcurrencyStep,
+		SoftTemp:                         cfg.SoftTemp,
+		HardTemp:                         cfg.HardTemp,
+		ThroughputFloorRatio:             cfg.ThroughputFloorRatio,
+		ThroughputWindow:                 time.Duration(cfg.ThroughputWindowSec) * time.Second,
+		ThroughputFloorWindow:            time.Duration(cfg.ThroughputFloorSec) * time.Second,
+		ThroughputSlowdownFloorRatio:     cfg.ThroughputSlowdownFloorRatio,
+		ThroughputRecoveryMaxAttempts:    cfg.ThroughputRecoveryMaxAttempts,
+		ThroughputRecoveryStepMultiplier: cfg.ThroughputRecoveryStepMultiplier,
+		TempHysteresisC:                  cfg.TempHysteresisC,
+		ThroughputRecoveryMargin:         cfg.ThroughputRecoveryMargin,
+		MemoryPressureLimit:              cfg.MemoryPressureLimit,
+		ThrottleRiskLimit:                cfg.ThrottleRiskLimit,
+		MaxConcurrencyStep:               cfg.MaxConcurrencyStep,
 	}
 }
 
@@ -97,6 +109,15 @@ func (c *RuleController) defaults() {
 	}
 	if c.ThroughputRecoveryMargin == 0 {
 		c.ThroughputRecoveryMargin = 0.05
+	}
+	if c.ThroughputSlowdownFloorRatio <= 0 || c.ThroughputSlowdownFloorRatio > c.ThroughputFloorRatio {
+		c.ThroughputSlowdownFloorRatio = 0.5
+	}
+	if c.ThroughputRecoveryMaxAttempts <= 0 {
+		c.ThroughputRecoveryMaxAttempts = 3
+	}
+	if c.ThroughputRecoveryStepMultiplier <= 1 {
+		c.ThroughputRecoveryStepMultiplier = 2
 	}
 	if c.MemoryPressureLimit <= 0 {
 		c.MemoryPressureLimit = 0.9
@@ -229,6 +250,15 @@ func actionIncrease(current int, step int, reason string) Action {
 	}
 }
 
+func actionPause(reason string) Action {
+	return Action{
+		Type:        ActionPause,
+		Reason:      reason,
+		CooldownSec: 0,
+		Concurrency: 0,
+	}
+}
+
 func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []throughput.Sample, state State) Action {
 	c.defaults()
 	action := Action{
@@ -272,11 +302,27 @@ func (c *RuleController) Decide(samples []telemetry.TelemetrySample, through []t
 
 	if state.BaselineThroughput > 0 {
 		threshold := state.BaselineThroughput * c.ThroughputFloorRatio
-		if throughputBelowThreshold(through, now, threshold, time.Duration(c.ThroughputFloorWindow)) && avgTp > 0 {
-			action = actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throughput below floor sustained")
+		slowdownThreshold := state.BaselineThroughput * c.ThroughputSlowdownFloorRatio
+
+		belowFloor := throughputBelowThreshold(through, now, threshold, time.Duration(c.ThroughputFloorWindow))
+		belowSlowdown := throughputBelowThreshold(through, now, slowdownThreshold, time.Duration(c.ThroughputFloorWindow))
+
+		if (belowFloor || belowSlowdown) && avgTp > 0 {
+			c.throughputRecoveryAttempts++
+			if c.throughputRecoveryAttempts > c.ThroughputRecoveryMaxAttempts {
+				c.throughputRecoveryAttempts = c.ThroughputRecoveryMaxAttempts
+				return actionPause("throughput recovery attempts exceeded, pausing to preserve state")
+			}
+
 			action.CooldownSec = 1.5
-			return action
+			if belowSlowdown {
+				step := c.MaxConcurrencyStep * c.ThroughputRecoveryStepMultiplier
+				return actionDecrease(state.CurrentConcurrency, step, "throughput below slowdown fallback, aggressive recovery")
+			}
+			return actionDecrease(state.CurrentConcurrency, c.MaxConcurrencyStep, "throughput below floor sustained")
 		}
+
+		c.throughputRecoveryAttempts = 0
 	}
 
 	if !tempValid {

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -162,11 +164,134 @@ func TestEngineHoldsOnDirectionalCooldown(t *testing.T) {
 	}
 }
 
+func TestEnginePausesWhenControllerRequestsPause(t *testing.T) {
+	adapter := &fakeAdapter{}
+	ctrl := &scriptedController{
+		actions: []control.Action{
+			{Type: control.ActionPause, Reason: "throughput recovery attempts exceeded"},
+		},
+	}
+
+	e := New(
+		Config{
+			Command:            "python generate_xtts.py",
+			MinConcurrency:     1,
+			MaxConcurrency:     2,
+			StartConcurrency:   1,
+			AdjustmentCooldown: 0,
+			PollInterval:       10 * time.Millisecond,
+			MaxConcurrencyStep: 1,
+			MaxTicks:           5,
+		},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	result, err := e.Start(context.Background())
+	if err != nil {
+		t.Fatalf("engine start failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected engine result")
+	}
+	if result.Reason != "throughput recovery attempts exceeded" {
+		t.Fatalf("expected pause reason, got %q", result.Reason)
+	}
+	if adapter.pauseCount != 1 {
+		t.Fatalf("expected one pause, got %d", adapter.pauseCount)
+	}
+}
+
+func TestEnginePersistsTelemetrySamples(t *testing.T) {
+	tmpDir := t.TempDir()
+	telemetryPath := filepath.Join(tmpDir, "telemetry.log")
+
+	adapter := &fakeAdapter{}
+	ctrl := &scriptedController{
+		actions: []control.Action{
+			{Type: control.ActionHold},
+		},
+	}
+
+	e := New(
+		Config{
+			Command:            "python generate_xtts.py",
+			MinConcurrency:     1,
+			MaxConcurrency:     2,
+			StartConcurrency:   1,
+			AdjustmentCooldown: 0,
+			PollInterval:       10 * time.Millisecond,
+			MaxConcurrencyStep: 1,
+			MaxTicks:           2,
+			TelemetryLogPath:   telemetryPath,
+		},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	_, err := e.Start(context.Background())
+	if err != nil {
+		t.Fatalf("engine start failed: %v", err)
+	}
+
+	if _, err := os.Stat(telemetryPath); err != nil {
+		t.Fatalf("expected telemetry store file at %s: %v", telemetryPath, err)
+	}
+}
+
+func TestEngineReportsStateEstimate(t *testing.T) {
+	adapter := &fakeAdapter{}
+	ctrl := &scriptedController{
+		actions: []control.Action{
+			{Type: control.ActionHold},
+		},
+	}
+
+	e := New(
+		Config{
+			Command:            "python generate_xtts.py",
+			MinConcurrency:     1,
+			MaxConcurrency:     2,
+			StartConcurrency:   1,
+			AdjustmentCooldown: 0,
+			PollInterval:       10 * time.Millisecond,
+			MaxConcurrencyStep: 1,
+			MaxTicks:           2,
+		},
+		adapter,
+		ctrl,
+		nil,
+		nil,
+		nil,
+	)
+
+	result, err := e.Start(context.Background())
+	if err != nil {
+		t.Fatalf("engine start failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected engine result")
+	}
+	if result.State.Estimate.Timestamp.IsZero() {
+		t.Fatal("expected state estimate timestamp")
+	}
+	if !result.State.Estimate.ConfidenceValid {
+		t.Fatal("expected confidence validity in state estimate")
+	}
+}
+
 type fakeAdapter struct {
 	mu           sync.Mutex
 	pid          int
 	running      bool
 	restartCount int
+	pauseCount   int
 }
 
 func (a *fakeAdapter) Start(_ context.Context, _ string, _ int) error {
@@ -183,6 +308,7 @@ func (a *fakeAdapter) Start(_ context.Context, _ string, _ int) error {
 func (a *fakeAdapter) Pause(context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.pauseCount++
 	a.running = false
 	return nil
 }

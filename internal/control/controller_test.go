@@ -201,3 +201,139 @@ func TestRuleController_HighThrottleRiskTriggersDecrease(t *testing.T) {
 		t.Fatalf("expected decrease on elevated throttle risk, got %s", action.Type)
 	}
 }
+
+func TestRuleController_DecreasesAggressivelyBelowSlowdownFallback(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		SoftTemp:                         78,
+		HardTemp:                         90,
+		TempHysteresisC:                  2,
+		ThroughputFloorRatio:             0.7,
+		ThroughputSlowdownFloorRatio:     0.5,
+		ThroughputRecoveryMaxAttempts:    2,
+		ThroughputRecoveryStepMultiplier: 3,
+		MaxConcurrencyStep:               2,
+		ThroughputWindowSec:              30,
+		ThroughputFloorSec:               1,
+		ThroughputRecoveryMargin:         0.05,
+	})
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 60, TempValid: true},
+	}
+	throughSamples := []throughput.Sample{
+		{Timestamp: now.Add(-2 * time.Second), Throughput: 4},
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 4},
+		{Timestamp: now, Throughput: 4},
+	}
+	state := State{
+		CurrentConcurrency: 8,
+		MinConcurrency:     1,
+		MaxConcurrency:     10,
+		BaselineThroughput: 10,
+	}
+	action := c.Decide(telemetrySamples, throughSamples, state)
+	if action.Type != ActionDecrease {
+		t.Fatalf("expected aggressive decrease on slowdown fallback, got %s", action.Type)
+	}
+	if action.Concurrency != 2 {
+		t.Fatalf("expected concurrency decrease by recovery multiplier (8 -> 2), got %d", action.Concurrency)
+	}
+}
+
+func TestRuleController_PausesAfterRepeatedThroughputRecoveryFailures(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		SoftTemp:                         78,
+		HardTemp:                         90,
+		TempHysteresisC:                  2,
+		ThroughputFloorRatio:             0.7,
+		ThroughputSlowdownFloorRatio:     0.5,
+		ThroughputRecoveryMaxAttempts:    2,
+		ThroughputRecoveryStepMultiplier: 2,
+		ThroughputWindowSec:              30,
+		ThroughputFloorSec:               1,
+		ThroughputRecoveryMargin:         0.05,
+	})
+	throughSamples := []throughput.Sample{
+		{Timestamp: now.Add(-2 * time.Second), Throughput: 3},
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 3},
+		{Timestamp: now, Throughput: 3},
+	}
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 60, TempValid: true},
+	}
+	state := State{
+		CurrentConcurrency: 8,
+		MinConcurrency:     1,
+		MaxConcurrency:     10,
+		BaselineThroughput: 10,
+	}
+
+	action1 := c.Decide(telemetrySamples, throughSamples, state)
+	if action1.Type != ActionDecrease {
+		t.Fatalf("expected decrease on first recovery attempt, got %s", action1.Type)
+	}
+
+	action2 := c.Decide(telemetrySamples, throughSamples, state)
+	if action2.Type != ActionDecrease {
+		t.Fatalf("expected decrease on second recovery attempt, got %s", action2.Type)
+	}
+
+	action3 := c.Decide(telemetrySamples, throughSamples, state)
+	if action3.Type != ActionPause {
+		t.Fatalf("expected pause after repeated recovery failures, got %s", action3.Type)
+	}
+}
+
+func TestRuleController_RecoversFloorStateAfterRecovery(t *testing.T) {
+	now := time.Now()
+	c := NewRuleController(RuleConfig{
+		SoftTemp:                         78,
+		HardTemp:                         90,
+		TempHysteresisC:                  2,
+		ThroughputFloorRatio:             0.7,
+		ThroughputSlowdownFloorRatio:     0.5,
+		ThroughputRecoveryMaxAttempts:    1,
+		ThroughputRecoveryStepMultiplier: 2,
+		ThroughputWindowSec:              30,
+		ThroughputFloorSec:               1,
+		ThroughputRecoveryMargin:         0.05,
+	})
+	throughSamples := []throughput.Sample{
+		{Timestamp: now.Add(-2 * time.Second), Throughput: 3},
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 3},
+		{Timestamp: now, Throughput: 3},
+	}
+	recoverySamples := []throughput.Sample{
+		{Timestamp: now.Add(-2 * time.Second), Throughput: 8},
+		{Timestamp: now.Add(-1 * time.Second), Throughput: 8},
+		{Timestamp: now, Throughput: 8},
+	}
+	telemetrySamples := []telemetry.TelemetrySample{
+		{Timestamp: now, TempC: 60, TempValid: true},
+	}
+	recoveryTelemetry := []telemetry.TelemetrySample{
+		{Timestamp: now, TempValid: false},
+	}
+	state := State{
+		CurrentConcurrency: 8,
+		MinConcurrency:     1,
+		MaxConcurrency:     10,
+		BaselineThroughput: 10,
+	}
+
+	action1 := c.Decide(telemetrySamples, throughSamples, state)
+	if action1.Type != ActionDecrease {
+		t.Fatalf("expected decrease while below floor, got %s", action1.Type)
+	}
+
+	action2 := c.Decide(recoveryTelemetry, recoverySamples, state)
+	if action2.Type != ActionHold {
+		t.Fatalf("expected hold when floor condition is cleared but temp is unavailable, got %s", action2.Type)
+	}
+
+	action3 := c.Decide(telemetrySamples, throughSamples, state)
+	if action3.Type != ActionDecrease {
+		t.Fatalf("expected new recovery to restart after recovery reset, got %s", action3.Type)
+	}
+}

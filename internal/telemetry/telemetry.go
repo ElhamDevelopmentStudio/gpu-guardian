@@ -11,28 +11,30 @@ import (
 )
 
 type TelemetrySample struct {
-	Timestamp           time.Time `json:"timestamp"`
-	TempC               int       `json:"temp_c"`
-	TempValid           bool      `json:"temp_valid"`
-	UtilPct             float64   `json:"util_pct"`
-	UtilValid           bool      `json:"util_valid"`
-	VramUsedMB          int       `json:"vram_used_mb"`
-	VramUsedValid       bool      `json:"vram_used_valid"`
-	VramTotalMB         int       `json:"vram_total_mb"`
-	VramTotalValid      bool      `json:"vram_total_valid"`
-	PowerDrawW          float64   `json:"power_draw_w"`
-	PowerDrawValid      bool      `json:"power_draw_valid"`
-	PowerLimitW         float64   `json:"power_limit_w"`
-	PowerLimitValid     bool      `json:"power_limit_valid"`
-	ClockSmMHz          float64   `json:"clock_sm_mhz"`
-	ClockSmValid        bool      `json:"clock_sm_valid"`
-	ClockMemMHz         float64   `json:"clock_mem_mhz"`
-	ClockMemValid       bool      `json:"clock_mem_valid"`
-	MemoryPressure      float64   `json:"memory_pressure"`
-	MemoryPressureValid bool      `json:"memory_pressure_valid"`
-	ThrottleRisk        float64   `json:"throttle_risk"`
-	ThrottleRiskValid   bool      `json:"throttle_risk_valid"`
-	Error               string    `json:"error,omitempty"`
+	Timestamp            time.Time `json:"timestamp"`
+	TempC                int       `json:"temp_c"`
+	TempValid            bool      `json:"temp_valid"`
+	UtilPct              float64   `json:"util_pct"`
+	UtilValid            bool      `json:"util_valid"`
+	VramUsedMB           int       `json:"vram_used_mb"`
+	VramUsedValid        bool      `json:"vram_used_valid"`
+	VramTotalMB          int       `json:"vram_total_mb"`
+	VramTotalValid       bool      `json:"vram_total_valid"`
+	PowerDrawW           float64   `json:"power_draw_w"`
+	PowerDrawValid       bool      `json:"power_draw_valid"`
+	PowerLimitW          float64   `json:"power_limit_w"`
+	PowerLimitValid      bool      `json:"power_limit_valid"`
+	ClockSmMHz           float64   `json:"clock_sm_mhz"`
+	ClockSmValid         bool      `json:"clock_sm_valid"`
+	ClockMemMHz          float64   `json:"clock_mem_mhz"`
+	ClockMemValid        bool      `json:"clock_mem_valid"`
+	MemoryPressure       float64   `json:"memory_pressure"`
+	MemoryPressureValid  bool      `json:"memory_pressure_valid"`
+	ThrottleRisk         float64   `json:"throttle_risk"`
+	ThrottleRiskValid    bool      `json:"throttle_risk_valid"`
+	ThrottleReasons      string    `json:"throttle_reasons"`
+	ThrottleReasonsValid bool      `json:"throttle_reasons_valid"`
+	Error                string    `json:"error,omitempty"`
 }
 
 type Collector struct{}
@@ -40,6 +42,8 @@ type Collector struct{}
 func NewCollector() *Collector {
 	return &Collector{}
 }
+
+var runNvidiaSMICommand = runNvidiaSMI
 
 func parseFloatField(v string) (float64, error) {
 	v = strings.TrimSpace(v)
@@ -57,7 +61,7 @@ func parseIntField(v string) (int, error) {
 	return strconv.Atoi(v)
 }
 
-const nvidiaQueryFields = "temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,clocks.current.sm,clocks.current.memory"
+const nvidiaQueryFields = "temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,clocks.current.sm,clocks.current.memory,clocks_throttle_reasons.active"
 const nvidiaQueryFieldsFallback = "temperature.gpu,utilization.gpu,memory.used,memory.total"
 
 func runNvidiaSMI(ctx context.Context, query string) ([]byte, error) {
@@ -86,10 +90,10 @@ func clamp01(v float64) float64 {
 
 func (c *Collector) Sample(ctx context.Context) TelemetrySample {
 	s := TelemetrySample{Timestamp: time.Now()}
-	out, err := runNvidiaSMI(ctx, nvidiaQueryFields)
+	out, err := runNvidiaSMICommand(ctx, nvidiaQueryFields)
 	if err != nil {
 		primaryErr := err
-		out, err = runNvidiaSMI(ctx, nvidiaQueryFieldsFallback)
+		out, err = runNvidiaSMICommand(ctx, nvidiaQueryFieldsFallback)
 		if err != nil {
 			s.Error = fmt.Sprintf("nvidia-smi error: %v; fallback error: %v", primaryErr, err)
 			return s
@@ -141,7 +145,7 @@ func (c *Collector) Sample(ctx context.Context) TelemetrySample {
 	}
 
 	parseCoreFields()
-	if len(parts) < 8 {
+	if len(parts) < 9 {
 		setDerivedMetrics(&s)
 		return s
 	}
@@ -173,6 +177,9 @@ func (c *Collector) Sample(ctx context.Context) TelemetrySample {
 	} else {
 		s.Error = fmt.Sprintf("%s; clocks.current.memory parse failed: %v", s.Error, err)
 	}
+
+	s.ThrottleReasons = strings.TrimSpace(parts[8])
+	s.ThrottleReasonsValid = true
 
 	setDerivedMetrics(&s)
 	return s

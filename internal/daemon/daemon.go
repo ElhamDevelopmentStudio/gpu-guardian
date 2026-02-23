@@ -44,33 +44,37 @@ const (
 )
 
 type StartRequest struct {
-	Command                  string  `json:"command"`
-	PollIntervalSec          int     `json:"poll_interval_sec"`
-	SoftTemp                 float64 `json:"soft_temp"`
-	HardTemp                 float64 `json:"hard_temp"`
-	MinConcurrency           int     `json:"min_concurrency"`
-	MaxConcurrency           int     `json:"max_concurrency"`
-	StartConcurrency         int     `json:"start_concurrency"`
-	ThroughputFloorRatio     float64 `json:"throughput_floor_ratio"`
-	TempHysteresisC          float64 `json:"temp_hysteresis_c"`
-	ThroughputRecoveryMargin float64 `json:"throughput_recovery_margin"`
-	MemoryPressureLimit      float64 `json:"memory_pressure_limit"`
-	ThrottleRiskLimit        float64 `json:"throttle_risk_limit"`
-	AdjustmentCooldownSec    int     `json:"adjustment_cooldown_sec"`
-	MaxConcurrencyStep       int     `json:"max_concurrency_step"`
-	BaselineWindowSec        int     `json:"baseline_window_sec"`
-	ThroughputWindowSec      int     `json:"throughput_window_sec"`
-	ThroughputFloorWindowSec int     `json:"throughput_floor_window_sec"`
-	AdapterStopTimeoutSec    int     `json:"adapter_stop_timeout_sec"`
-	LogPath                  string  `json:"log_file"`
-	LogMaxSizeMB             int     `json:"log_max_size_mb"`
-	WorkloadLogPath          string  `json:"workload_log_path"`
-	EchoWorkloadOutput       bool    `json:"echo_workload_output"`
-	MaxTicks                 int     `json:"max_ticks"`
-	Mode                     string  `json:"mode"`
-	CheckpointPath           string  `json:"checkpoint_path"`
-	RecoveryMaxRetries       int     `json:"recovery_max_retries"`
-	RecoveryCooldownSec      int     `json:"recovery_cooldown_sec"`
+	Command                          string  `json:"command"`
+	PollIntervalSec                  int     `json:"poll_interval_sec"`
+	SoftTemp                         float64 `json:"soft_temp"`
+	HardTemp                         float64 `json:"hard_temp"`
+	MinConcurrency                   int     `json:"min_concurrency"`
+	MaxConcurrency                   int     `json:"max_concurrency"`
+	StartConcurrency                 int     `json:"start_concurrency"`
+	ThroughputFloorRatio             float64 `json:"throughput_floor_ratio"`
+	ThroughputSlowdownFloorRatio     float64 `json:"throughput_slowdown_floor_ratio"`
+	TempHysteresisC                  float64 `json:"temp_hysteresis_c"`
+	ThroughputRecoveryMargin         float64 `json:"throughput_recovery_margin"`
+	ThroughputRecoveryMaxAttempts    int     `json:"throughput_recovery_max_attempts"`
+	ThroughputRecoveryStepMultiplier int     `json:"throughput_recovery_step_multiplier"`
+	MemoryPressureLimit              float64 `json:"memory_pressure_limit"`
+	ThrottleRiskLimit                float64 `json:"throttle_risk_limit"`
+	TelemetryLogPath                 string  `json:"telemetry_log_path"`
+	AdjustmentCooldownSec            int     `json:"adjustment_cooldown_sec"`
+	MaxConcurrencyStep               int     `json:"max_concurrency_step"`
+	BaselineWindowSec                int     `json:"baseline_window_sec"`
+	ThroughputWindowSec              int     `json:"throughput_window_sec"`
+	ThroughputFloorWindowSec         int     `json:"throughput_floor_window_sec"`
+	AdapterStopTimeoutSec            int     `json:"adapter_stop_timeout_sec"`
+	LogPath                          string  `json:"log_file"`
+	LogMaxSizeMB                     int     `json:"log_max_size_mb"`
+	WorkloadLogPath                  string  `json:"workload_log_path"`
+	EchoWorkloadOutput               bool    `json:"echo_workload_output"`
+	MaxTicks                         int     `json:"max_ticks"`
+	Mode                             string  `json:"mode"`
+	CheckpointPath                   string  `json:"checkpoint_path"`
+	RecoveryMaxRetries               int     `json:"recovery_max_retries"`
+	RecoveryCooldownSec              int     `json:"recovery_cooldown_sec"`
 }
 
 type HealthResponse struct {
@@ -92,20 +96,21 @@ type ErrorResponse struct {
 }
 
 type SessionState struct {
-	ID             string                    `json:"id"`
-	Running        bool                      `json:"running"`
-	State          engine.RunState           `json:"state"`
-	StartedAt      time.Time                 `json:"started_at"`
-	StoppedAt      time.Time                 `json:"stopped_at"`
-	LastReason     string                    `json:"last_reason"`
-	LastError      string                    `json:"last_error,omitempty"`
-	Mode           string                    `json:"mode"`
-	Goal           string                    `json:"goal"`
-	LastAction     control.Action            `json:"last_action"`
-	LastSample     telemetry.TelemetrySample `json:"last_sample"`
-	Retries        int                       `json:"retries"`
-	Errors         []string                  `json:"errors"`
-	CheckpointPath string                    `json:"checkpoint_path"`
+	ID               string                    `json:"id"`
+	Running          bool                      `json:"running"`
+	State            engine.RunState           `json:"state"`
+	StartedAt        time.Time                 `json:"started_at"`
+	StoppedAt        time.Time                 `json:"stopped_at"`
+	LastReason       string                    `json:"last_reason"`
+	LastError        string                    `json:"last_error,omitempty"`
+	Mode             string                    `json:"mode"`
+	Goal             string                    `json:"goal"`
+	LastAction       control.Action            `json:"last_action"`
+	LastSample       telemetry.TelemetrySample `json:"last_sample"`
+	Retries          int                       `json:"retries"`
+	Errors           []string                  `json:"errors"`
+	CheckpointPath   string                    `json:"checkpoint_path"`
+	TelemetryLogPath string                    `json:"telemetry_log_path"`
 }
 
 type SessionStateResponse struct {
@@ -134,6 +139,7 @@ type sessionState struct {
 	retries            int
 	errors             []string
 	checkpointPath     string
+	telemetryLogPath   string
 	recoveryMaxRetries int
 	recoveryCooldown   time.Duration
 }
@@ -347,14 +353,15 @@ func (s *Server) sessionSnapshot(id string, sess *sessionState) SessionState {
 		return SessionState{}
 	}
 	sessState := SessionState{
-		ID:             id,
-		Mode:           sess.mode,
-		Goal:           sess.goal,
-		LastAction:     sess.lastAction,
-		LastSample:     sess.lastSample,
-		Retries:        sess.retries,
-		Errors:         append([]string(nil), sess.errors...),
-		CheckpointPath: sess.checkpointPath,
+		ID:               id,
+		Mode:             sess.mode,
+		Goal:             sess.goal,
+		LastAction:       sess.lastAction,
+		LastSample:       sess.lastSample,
+		Retries:          sess.retries,
+		Errors:           append([]string(nil), sess.errors...),
+		CheckpointPath:   sess.checkpointPath,
+		TelemetryLogPath: sess.telemetryLogPath,
 	}
 	sessState.Running = sess.running
 	sessState.StartedAt = sess.startedAt
@@ -392,16 +399,19 @@ func (s *Server) startSession(ctx context.Context, req StartRequest) (string, er
 		EchoOutput:  req.EchoWorkloadOutput,
 	}
 	controlCfg := control.RuleConfig{
-		SoftTemp:                 req.SoftTemp,
-		HardTemp:                 req.HardTemp,
-		ThroughputFloorRatio:     req.ThroughputFloorRatio,
-		ThroughputWindowSec:      req.ThroughputWindowSec,
-		ThroughputFloorSec:       req.ThroughputFloorWindowSec,
-		TempHysteresisC:          req.TempHysteresisC,
-		ThroughputRecoveryMargin: req.ThroughputRecoveryMargin,
-		MemoryPressureLimit:      req.MemoryPressureLimit,
-		ThrottleRiskLimit:        req.ThrottleRiskLimit,
-		MaxConcurrencyStep:       req.MaxConcurrencyStep,
+		SoftTemp:                         req.SoftTemp,
+		HardTemp:                         req.HardTemp,
+		ThroughputFloorRatio:             req.ThroughputFloorRatio,
+		ThroughputSlowdownFloorRatio:     req.ThroughputSlowdownFloorRatio,
+		ThroughputWindowSec:              req.ThroughputWindowSec,
+		ThroughputFloorSec:               req.ThroughputFloorWindowSec,
+		ThroughputRecoveryMaxAttempts:    req.ThroughputRecoveryMaxAttempts,
+		ThroughputRecoveryStepMultiplier: req.ThroughputRecoveryStepMultiplier,
+		TempHysteresisC:                  req.TempHysteresisC,
+		ThroughputRecoveryMargin:         req.ThroughputRecoveryMargin,
+		MemoryPressureLimit:              req.MemoryPressureLimit,
+		ThrottleRiskLimit:                req.ThrottleRiskLimit,
+		MaxConcurrencyStep:               req.MaxConcurrencyStep,
 	}
 	controller := control.NewRuleController(controlCfg)
 
@@ -456,7 +466,11 @@ func (s *Server) startSession(ctx context.Context, req StartRequest) (string, er
 
 			if runErr == nil {
 				sess.running = false
-				sess.goal = string(SessionGoalStopped)
+				if result != nil && result.State.LastAction.Type == control.ActionPause {
+					sess.goal = string(SessionGoalPaused)
+				} else {
+					sess.goal = string(SessionGoalStopped)
+				}
 				sess.stoppedAt = time.Now()
 				s.mu.Unlock()
 				s.persistSessionState(sess)
@@ -540,6 +554,7 @@ func StartRequestToEngineConfig(req StartRequest) engine.Config {
 		ThroughputFloorWindow: time.Duration(req.ThroughputFloorWindowSec) * time.Second,
 		BaselineWindow:        time.Duration(req.BaselineWindowSec) * time.Second,
 		MaxConcurrencyStep:    req.MaxConcurrencyStep,
+		TelemetryLogPath:      req.TelemetryLogPath,
 		MaxTicks:              req.MaxTicks,
 	}
 }
@@ -560,6 +575,9 @@ func normalizeStartRequest(req *StartRequest) {
 	}
 	if req.ThrottleRiskLimit <= 0 {
 		req.ThrottleRiskLimit = 0.85
+	}
+	if req.TelemetryLogPath == "" {
+		req.TelemetryLogPath = "guardian.telemetry.log"
 	}
 	if req.PollIntervalSec <= 0 {
 		req.PollIntervalSec = 2
@@ -588,11 +606,20 @@ func normalizeStartRequest(req *StartRequest) {
 	if req.ThroughputFloorRatio <= 0 {
 		req.ThroughputFloorRatio = 0.7
 	}
+	if req.ThroughputSlowdownFloorRatio <= 0 || req.ThroughputSlowdownFloorRatio > req.ThroughputFloorRatio {
+		req.ThroughputSlowdownFloorRatio = 0.5
+	}
 	if req.AdjustmentCooldownSec <= 0 {
 		req.AdjustmentCooldownSec = 10
 	}
 	if req.MaxConcurrencyStep <= 0 {
 		req.MaxConcurrencyStep = 1
+	}
+	if req.ThroughputRecoveryMaxAttempts <= 0 {
+		req.ThroughputRecoveryMaxAttempts = 3
+	}
+	if req.ThroughputRecoveryStepMultiplier <= 1 {
+		req.ThroughputRecoveryStepMultiplier = 2
 	}
 	if req.BaselineWindowSec <= 0 {
 		req.BaselineWindowSec = 120
@@ -625,7 +652,9 @@ func normalizeStartRequest(req *StartRequest) {
 
 func (s *Server) ensureModeDefaults(req *StartRequest, sess *sessionState) {
 	sess.mode = req.Mode
+	sess.telemetryLogPath = req.TelemetryLogPath
 	if sess.mode != string(SessionModeStateful) {
+		sess.telemetryLogPath = ""
 		sess.checkpointPath = ""
 		return
 	}
@@ -633,6 +662,7 @@ func (s *Server) ensureModeDefaults(req *StartRequest, sess *sessionState) {
 	if req.CheckpointPath == "" {
 		req.CheckpointPath = makeCheckpointPath()
 	}
+	sess.telemetryLogPath = req.TelemetryLogPath
 	sess.checkpointPath = req.CheckpointPath
 }
 

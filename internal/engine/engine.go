@@ -61,6 +61,7 @@ type Config struct {
 	BaselineWindow        time.Duration `json:"baseline_window"`
 	MaxConcurrencyStep    int           `json:"max_concurrency_step"`
 	MaxTicks              int           `json:"max_ticks"`
+	TelemetryLogPath      string        `json:"telemetry_log_path"`
 }
 
 // RunState exposes the latest engine decision context and runtime snapshot.
@@ -73,6 +74,7 @@ type RunState struct {
 	LastTelemetry      telemetry.TelemetrySample `json:"last_telemetry"`
 	LastThroughput     throughput.Sample         `json:"last_throughput"`
 	BaselineThroughput float64                   `json:"baseline_throughput"`
+	Estimate           control.StateEstimate     `json:"estimate"`
 	ProcessPID         int                       `json:"process_pid"`
 }
 
@@ -111,6 +113,8 @@ type Engine struct {
 	controller         control.Controller
 	telemetryCollector *telemetry.Collector
 	throughputTracker  *throughput.Tracker
+	telemetryStore     *telemetry.SampleStore
+	stateEstimator     *control.StateEstimator
 	nowFn              func() time.Time
 	lifecycleMu        sync.Mutex
 	lifecycle          Lifecycle
@@ -137,6 +141,7 @@ func New(
 	if throughputTracker == nil {
 		throughputTracker = throughput.NewTracker(cfg.ThroughputWindow, cfg.BaselineWindow)
 	}
+	stateEstimator := control.NewStateEstimator()
 	return &Engine{
 		cfg:                cfg,
 		logger:             loggerSink,
@@ -144,6 +149,8 @@ func New(
 		controller:         controller,
 		telemetryCollector: telemetryCollector,
 		throughputTracker:  throughputTracker,
+		telemetryStore:     nil,
+		stateEstimator:     stateEstimator,
 		nowFn:              time.Now,
 		lifecycle:          Lifecycle{Phase: LifecycleIdle, UpdatedAt: time.Now()},
 	}
@@ -288,6 +295,13 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 		e.setLifecycle(LifecycleFailed, "invalid_config", err)
 		return nil, err
 	}
+	if err := e.ensureTelemetryStore(); err != nil {
+		e.setLifecycle(LifecycleFailed, "telemetry_store_failed", err)
+		return nil, err
+	}
+	if e.telemetryStore != nil {
+		defer e.telemetryStore.Close()
+	}
 
 	e.logDebug("starting engine", map[string]interface{}{
 		"version":                e.cfg.APIVersion,
@@ -353,6 +367,12 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 			}
 
 			ts := e.telemetryCollector.Sample(ctx)
+			if err := e.persistTelemetrySample(ts); err != nil {
+				e.logger.Warn("failed to persist telemetry sample", map[string]interface{}{
+					"error":          err.Error(),
+					"telemetry_path": e.cfg.TelemetryLogPath,
+				})
+			}
 			telemetryWindow = appendTelemetry(telemetryWindow, ts)
 			state.LastTelemetry = ts
 			state.LastTelemetryAt = now
@@ -362,6 +382,7 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 			state.LastThroughput = throughputSample
 			state.BaselineThroughput = e.throughputTracker.Baseline()
 			state.ProcessPID = e.adapter.GetPID()
+			state.Estimate = e.stateEstimator.Estimate(telemetryWindow, e.throughputTracker.Samples())
 
 			actionState := control.State{
 				CurrentConcurrency: state.CurrentConcurrency,
@@ -383,6 +404,27 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 				throughputRatio = throughputSample.Throughput / state.BaselineThroughput
 			}
 
+			if action.Type == control.ActionPause {
+				state.LastActionAt = now
+				if err := e.adapter.Pause(ctx); err != nil {
+					e.logger.Error("failed to pause workload", map[string]interface{}{
+						"error": err.Error(),
+					})
+					result.Reason = "failed_to_pause_workload"
+					e.setLifecycle(LifecycleFailed, result.Reason, err)
+					updateResult()
+					return result, err
+				}
+				result.Reason = action.Reason
+				e.setLifecycle(LifecycleStopping, result.Reason, nil)
+				e.logger.Info("workload_paused", map[string]interface{}{
+					"reason":      action.Reason,
+					"concurrency": state.CurrentConcurrency,
+				})
+				updateResult()
+				return result, nil
+			}
+
 			if action.Type != control.ActionHold {
 				target := boundedStepDelta(state.CurrentConcurrency, action.Concurrency, e.cfg.MinConcurrency, e.cfg.MaxConcurrency, e.cfg.MaxConcurrencyStep)
 				if target == state.CurrentConcurrency {
@@ -395,33 +437,43 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 					action.Concurrency = target
 				}
 			}
-
 			state.LastAction = action
 			updateResult()
+
 			e.logger.Info("engine_tick", map[string]interface{}{
-				"timestamp":              now.Format(time.RFC3339),
-				"event":                  "engine_tick",
-				"pid":                    state.ProcessPID,
-				"action":                 string(action.Type),
-				"action_reason":          action.Reason,
-				"concurrency":            state.CurrentConcurrency,
-				"target_concurrency":     action.Concurrency,
-				"temp_c":                 ts.TempC,
-				"temp_valid":             ts.TempValid,
-				"util_pct":               ts.UtilPct,
-				"util_valid":             ts.UtilValid,
-				"vram_used_mb":           ts.VramUsedMB,
-				"vram_total_mb":          ts.VramTotalMB,
-				"vram_valid":             ts.VramTotalValid && ts.VramUsedValid,
-				"memory_pressure":        ts.MemoryPressure,
-				"memory_pressure_valid":  ts.MemoryPressureValid,
-				"throttle_risk":          ts.ThrottleRisk,
-				"throttle_risk_valid":    ts.ThrottleRiskValid,
-				"effective_cooldown_sec": cooldown.Seconds(),
-				"throughput_bps":         throughputSample.Throughput,
-				"baseline_bps":           state.BaselineThroughput,
-				"throughput_ratio":       throughputRatio,
-				"telemetry_error":        ts.Error,
+				"timestamp":                 now.Format(time.RFC3339),
+				"event":                     "engine_tick",
+				"pid":                       state.ProcessPID,
+				"action":                    string(action.Type),
+				"action_reason":             action.Reason,
+				"concurrency":               state.CurrentConcurrency,
+				"target_concurrency":        action.Concurrency,
+				"temp_c":                    ts.TempC,
+				"temp_valid":                ts.TempValid,
+				"util_pct":                  ts.UtilPct,
+				"util_valid":                ts.UtilValid,
+				"vram_used_mb":              ts.VramUsedMB,
+				"vram_total_mb":             ts.VramTotalMB,
+				"vram_valid":                ts.VramTotalValid && ts.VramUsedValid,
+				"memory_pressure":           ts.MemoryPressure,
+				"memory_pressure_valid":     ts.MemoryPressureValid,
+				"throttle_risk":             ts.ThrottleRisk,
+				"throttle_risk_valid":       ts.ThrottleRiskValid,
+				"effective_cooldown_sec":    cooldown.Seconds(),
+				"throughput_bps":            throughputSample.Throughput,
+				"baseline_bps":              state.BaselineThroughput,
+				"throughput_ratio":          throughputRatio,
+				"telemetry_error":           ts.Error,
+				"temp_slope_c_per_sec":      state.Estimate.TempSlopeCPerSec,
+				"temp_slope_valid":          state.Estimate.TempSlopeValid,
+				"throughput_trend":          state.Estimate.ThroughputTrend,
+				"throughput_trend_valid":    state.Estimate.ThroughputTrendValid,
+				"throttle_risk_score":       state.Estimate.ThrottleRiskScore,
+				"throttle_risk_score_valid": state.Estimate.ThrottleRiskScoreValid,
+				"stability_index":           state.Estimate.StabilityIndex,
+				"stability_index_valid":     state.Estimate.StabilityIndexValid,
+				"estimate_confidence":       state.Estimate.Confidence,
+				"estimate_confidence_valid": state.Estimate.ConfidenceValid,
 			})
 
 			if action.Type == control.ActionHold {
@@ -451,6 +503,22 @@ func (e *Engine) Start(ctx context.Context) (*EngineResult, error) {
 
 func (e *Engine) logDebug(msg string, fields map[string]interface{}) {
 	e.logger.Info(msg, fields)
+}
+
+func (e *Engine) ensureTelemetryStore() error {
+	if e.cfg.TelemetryLogPath == "" {
+		return nil
+	}
+	store, err := telemetry.NewSampleStore(e.cfg.TelemetryLogPath)
+	if err != nil {
+		return err
+	}
+	e.telemetryStore = store
+	return nil
+}
+
+func (e *Engine) persistTelemetrySample(sample telemetry.TelemetrySample) error {
+	return e.telemetryStore.Append(sample)
 }
 
 // noopLogger implements EventLogger for callers that do not supply a sink.

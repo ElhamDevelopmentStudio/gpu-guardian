@@ -49,6 +49,10 @@ All flags:
 - `--adjustment-cooldown-sec`
 - `--memory-pressure-limit`
 - `--throttle-risk-limit`
+- `--throughput-slowdown-floor-ratio`
+- `--throughput-recovery-max-attempts`
+- `--throughput-recovery-step-multiplier`
+- `--telemetry-log`
 - `--baseline-window-sec`
 - `--throughput-window-sec`
 - `--throughput-floor-window-sec`
@@ -74,8 +78,12 @@ Save defaults to `.guardian-mvp.json` (or pass `--config`):
   "start_concurrency": 4,
   "temp_hysteresis_c": 2,
   "throughput_recovery_margin": 0.05,
+  "throughput_slowdown_floor_ratio": 0.5,
   "memory_pressure_limit": 0.9,
   "throttle_risk_limit": 0.85,
+  "throughput_recovery_max_attempts": 3,
+  "throughput_recovery_step_multiplier": 2,
+  "telemetry_log_path": "telemetry.log",
   "throughput_floor_ratio": 0.7,
   "adjustment_cooldown_sec": 10,
   "max_concurrency_step": 1,
@@ -92,6 +100,15 @@ Save defaults to `.guardian-mvp.json` (or pass `--config`):
 ## Logging
 
 `--log-file` writes structured JSON lines with decision and telemetry fields.
+`--telemetry-log` writes timestamped raw telemetry samples to a JSONL log (one sample per line), useful for offline analysis and reporting.
+
+State estimation fields are now included in run state and logs (`engine_tick`):
+
+- `temp_slope_c_per_sec`
+- `throughput_trend`
+- `throttle_risk_score`
+- `stability_index`
+- `estimate_confidence`
 
 ## Tests
 

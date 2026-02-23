@@ -47,21 +47,31 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
   - Engine now supports dynamic cooldown windows (policy override + directional anti-oscillation), bounded concurrency deltas, and per-adjustment logging.
   - Control knobs added to config/daemon request path for hysteresis and adjustment behavior.
 
-6. **[ ] FR-17 + FR-18 + FR-19 (Throughput floor + recovery fallback)**
-   - Implement configurable throughput floor logic (70–80% baseline OR ≤2× sustained slowdown fallback).
-   - Aggressive reduction/recovery path after floor violation beyond grace window.
-   - Safe job pause + preserve state if repeated recovery fails.
+6. **[x] FR-17 + FR-18 + FR-19 (Throughput floor + recovery fallback)**
+   - Implemented configurable floor control in `internal/control` and daemon-aware pause behavior:
+     - Configurable floor ratio (`throughput_floor_ratio`) and fallback slowdown ratio (`throughput_slowdown_floor_ratio`) with defaults `0.7` and `0.5`.
+     - Aggressive recovery path after sustained floor violations and bounded recovery attempts (`throughput_recovery_max_attempts`).
+     - Escalation to `pause` action when recovery attempts are exhausted.
+   - Implemented `engine` pause action handling and daemon session `goal` transition to `paused` when controller requests pause, preserving stop/error context in session state.
 
 ## P1 — Telemetry and state estimation completeness
 
-1. **[ ] FR-3 + FR-4 + FR-5 (Telemetry breadth, persistence, resilience)**
-   - Ensure collection includes: temperature, utilization, VRAM used/total, power, clocks, throttle indicators.
-   - Persist timestamped telemetry samples.
-   - Missing fields must be non-fatal; degrade policy and logs safely.
+1. **[x] FR-3 + FR-4 + FR-5 (Telemetry breadth, persistence, resilience)**
+   - ✅ Implemented telemetry breadth with throttling indicators via `clocks_throttle_reasons.active` when supported.
+   - ✅ Added timestamped telemetry persistence through a JSONL sample store and CLI/configurable path (`--telemetry-log`, `telemetry_log_path`, engine `TelemetryLogPath`).
+   - ✅ Missing/unsupported extended telemetry fields now degrade to core fields and are still sampled without crashing policy loop.
+   - ✅ Added tests:
+     - `internal/telemetry/telemetry_test.go` (full extended parse, fallback behavior, malformed output resiliency, sample store append)
+     - `internal/engine/engine_test.go` (engine writes telemetry samples to configured sample log)
+     - `cmd/guardian/main_test.go` integration assertion for telemetry log generation
 
 2. **[ ] FR-6 + FR-7 (Derived state estimation)**
-   - Add: dT/dt, throughput trend, throttle risk score, stability index.
-   - Add temporal smoothing to avoid control churn.
+   - ✅ Added `internal/control.StateEstimate` with dT/dt (`temp_slope_c_per_sec`), throughput trend (`throughput_trend`), throttle risk score (`throttle_risk_score`), stability index (`stability_index`), and confidence.
+   - ✅ Added `control.StateEstimator` with EMA-style temporal smoothing for noise control.
+   - ✅ Threaded estimates into run state (`RunState.Estimate`) and CLI/engine logging.
+   - ✅ Added unit coverage:
+     - `internal/control/estimator_test.go` (`TestStateEstimatorComputesDerivedSignals`, `TestStateEstimatorAppliesSmoothing`, `TestStateEstimatorHandlesMissingData`)
+     - `internal/engine/engine_test.go` (`TestEngineReportsStateEstimate`)
 
 3. **[ ] FR-15 + FR-20 (Risk-aware policy input quality)**
    - Ensure policy decisions are driven by estimates, not raw spikes.
