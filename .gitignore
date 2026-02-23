@@ -6,6 +6,9 @@
 /tmp/
 *.out
 *.test
+npm/node_modules/
+npm/package-lock.json
+npm/binaries/
 
 # Go workspace/build artifacts
 /bin/

@@ -1,0 +1,22 @@
+{
+  "name": "@elhamdev/gpu-guardian",
+  "version": "0.1.0",
+  "description": "Node wrapper for gpu-guardian daemon/CLI with local-first communication defaults",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "guardian": "bin/guardian.js"
+  },
+  "main": "lib/client.js",
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/resolve.test.js && node test/client.test.js"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

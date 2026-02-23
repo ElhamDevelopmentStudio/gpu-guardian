@@ -179,10 +179,17 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
 
 ## P4 — Cross-ecosystem distribution and clients
 
-1. **[ ] NPM-1 + NPM-2 + NPM-3**
+1. **[x] NPM-1 + NPM-2 + NPM-3**
    - Implement npm package wrapper that does not require Go at install/runtime.
    - OS/arch detection + binary fetch/install strategy.
    - CLI passthrough and optional JS client API.
+
+   Implemented in `npm/`:
+   - `npm/lib/resolve.js` (env overrides + OS/arch normalization + on-demand download + cache path)
+   - `npm/lib/client.js` (localhost/default `http://127.0.0.1:8090/v1`, CLI-compatible API client)
+   - `npm/bin/guardian.js` (passthrough launcher)
+   - `npm/package.json` and `npm/README.md`
+   - Tests: `npm/test/resolve.test.js`, `npm/test/client.test.js`
 
 2. **[ ] PIP-1 + PIP-2 + PIP-3**
    - Implement pip package with binary packaging/fetch path.

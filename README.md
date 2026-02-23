@@ -20,7 +20,7 @@ rule-based control loop to adjust concurrency.
 
 - Daemon mode (local API)
 - `calibrate` mode for concurrency/thermal/VRAM baseline sweeps
-- No npm/pip packages
+- `npm/` CLI wrapper package + optional JS client integration
 - `simulate` mode for deterministic offline replay/what-if policy runs
 - No RL
 - No multi-GPU or multi-OS support
