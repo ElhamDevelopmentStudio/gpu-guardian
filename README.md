@@ -16,9 +16,10 @@ rule-based control loop to adjust concurrency.
 - Increases concurrency when conditions are healthy and below max cap
 - Logs structured decisions and telemetry
 
-## MVP Scope (this implementation)
+## Current capabilities
 
-- No daemon mode
+- Daemon mode (local API)
+- `calibrate` mode for concurrency/thermal/VRAM baseline sweeps
 - No npm/pip packages
 - No simulation mode
 - No RL
@@ -34,6 +35,10 @@ go build ./cmd/guardian
 
 ```bash
 guardian control --cmd "python generate_xtts.py"
+```
+
+```bash
+guardian calibrate --cmd "python generate_xtts.py"
 ```
 
 All flags:
@@ -62,6 +67,10 @@ All flags:
 - `--workload-log`
 - `--echo-workload-output`
 - `--max-ticks` (test/benchmark helper; runs loop for finite iterations)
+- `--calibration-step-duration-sec` (calibrate mode)
+- `--min-concurrency`, `--max-concurrency`, `--concurrency-step` (calibrate mode)
+- `--step-samples`, `--warmup-samples` (calibrate mode)
+- `--throughput-drop-ratio`, `--hard-temp`, `--output` (calibrate mode)
 - `--config <path>` (optional JSON config; values are defaults with overrides)
 
 ### JSON config

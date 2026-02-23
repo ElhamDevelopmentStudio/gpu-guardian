@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/elhamdev/gpu-guardian/internal/adapter"
+	"github.com/elhamdev/gpu-guardian/internal/calibration"
 	"github.com/elhamdev/gpu-guardian/internal/control"
 	"github.com/elhamdev/gpu-guardian/internal/daemon"
 	"github.com/elhamdev/gpu-guardian/internal/engine"
@@ -215,6 +216,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "control failed: %v\n", err)
 			os.Exit(1)
 		}
+	case "calibrate":
+		if err := runCalibration(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "calibrate failed: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		printUsage()
 		os.Exit(1)
@@ -225,6 +231,7 @@ func printUsage() {
 	fmt.Println("Usage: guardian <command>")
 	fmt.Println("  daemon  [--listen=<addr>]")
 	fmt.Println("  control --cmd \"<command>\" [flags]")
+	fmt.Println("  calibrate --cmd \"<command>\" [flags]")
 }
 
 func runDaemon(args []string) error {
@@ -406,6 +413,101 @@ func runControlLocal(ctx context.Context, cfg Config) error {
 		log.Error("engine failed", map[string]interface{}{"error": err.Error()})
 		return err
 	}
+	return nil
+}
+
+func runCalibration(args []string) error {
+	cfg := defaultConfig()
+	fs := flag.NewFlagSet("calibrate", flag.ContinueOnError)
+	cmd := fs.String("cmd", "", "Command to run, for example: python generate_xtts.py")
+	poll := fs.Int("poll-interval-sec", cfg.PollIntervalSec, "Calibration telemetry polling interval in seconds")
+	minConc := fs.Int("min-concurrency", cfg.MinConcurrency, "Minimum concurrency to test")
+	maxConc := fs.Int("max-concurrency", cfg.MaxConcurrency, "Maximum concurrency to test")
+	step := fs.Int("concurrency-step", 1, "Concurrency increment between calibration steps")
+	stepDur := fs.Int("calibration-step-duration-sec", 8, "Duration in seconds to sample each concurrency level (unless step-samples is set)")
+	stepSamples := fs.Int("step-samples", 0, "Exact number of samples to collect per step (overrides step duration)")
+	warmup := fs.Int("warmup-samples", 1, "Warmup samples to skip for throughput averaging per step")
+	hardTemp := fs.Float64("hard-temp", cfg.HardTemp, "Hard temperature threshold for safe concurrency ceiling")
+	throughputDrop := fs.Float64("throughput-drop-ratio", cfg.ThroughputFloorRatio, "Minimum throughput ratio to keep concurrency on safety frontier")
+	workloadLog := fs.String("workload-log", "", "Path for raw workload stdout/stderr log")
+	stopTimeout := fs.Int("adapter-stop-timeout-sec", cfg.AdapterStopTimeoutSec, "Graceful stop timeout in seconds")
+	outputPath := fs.String("output", "", "Write calibration profile JSON to this path")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg.Command = strings.TrimSpace(*cmd)
+	cfg.PollIntervalSec = *poll
+	cfg.MinConcurrency = *minConc
+	cfg.MaxConcurrency = *maxConc
+	if cfg.Command == "" {
+		return fmt.Errorf("command is required; use --cmd")
+	}
+	if err := normalizeConfig(&cfg); err != nil {
+		return err
+	}
+	if *step <= 0 {
+		return fmt.Errorf("concurrency-step must be greater than zero")
+	}
+	if *stepSamples < 0 {
+		return fmt.Errorf("step-samples cannot be negative")
+	}
+	if *stepDur <= 0 {
+		return fmt.Errorf("calibration-step-duration-sec must be greater than zero")
+	}
+	if *throughputDrop <= 0 || *throughputDrop > 1 {
+		return fmt.Errorf("throughput-drop-ratio must be in (0,1]")
+	}
+	if *warmup < 0 {
+		return fmt.Errorf("warmup-samples cannot be negative")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
+	defer func() {
+		signal.Stop(sigCh)
+		cancel()
+	}()
+
+	adapterCfg := adapter.Config{
+		OutputPath:  *workloadLog,
+		StopTimeout: time.Duration(*stopTimeout) * time.Second,
+	}
+	aw := adapter.NewXttsAdapter(adapterCfg)
+
+	calCfg := calibration.Config{
+		Command:             cfg.Command,
+		PollInterval:        time.Duration(cfg.PollIntervalSec) * time.Second,
+		MinConcurrency:      cfg.MinConcurrency,
+		MaxConcurrency:      cfg.MaxConcurrency,
+		ConcurrencyStep:     *step,
+		StepDuration:        time.Duration(*stepDur) * time.Second,
+		StepSamples:         *stepSamples,
+		WarmupSamples:       *warmup,
+		HardTempC:           *hardTemp,
+		ThroughputDropRatio: *throughputDrop,
+	}
+
+	profile, err := calibration.Run(ctx, calCfg, aw, telemetry.NewCollector())
+	if err != nil {
+		return fmt.Errorf("calibration failed: %w", err)
+	}
+
+	payload, err := json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize calibration profile: %w", err)
+	}
+	if *outputPath != "" {
+		if err := os.WriteFile(*outputPath, payload, 0o600); err != nil {
+			return fmt.Errorf("write calibration profile: %w", err)
+		}
+	}
+	fmt.Println(string(payload))
 	return nil
 }
 

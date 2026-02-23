@@ -113,9 +113,17 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
 
 ## P2 — Calibration, reporting, simulation, and traceability
 
-1. **[ ] FR-11 + FR-12 (Calibration mode implementation)**
+1. **[x] FR-11 + FR-12 (Calibration mode implementation)**
    - Add one-click calibration flow for target workload + GPU.
    - Compute: baseline throughput, safe concurrency ceiling, thermal saturation curve, VRAM per load unit.
+   - Implemented in `cmd/guardian` as `calibrate` command:
+     - `runCalibration` performs a bounded concurrency sweep using existing `XTTSAdapter` + `nvidia-smi` telemetry collector.
+     - `internal/calibration` computes:
+       - `baseline_throughput`
+       - `safe_concurrency_ceiling`
+       - `thermal_saturation_curve`
+       - `vram_per_load_unit_mb`
+     - Outputs profile JSON to optional `--output` path (console always prints JSON).
 
 2. **[ ] FR-13 (Profile persistence)**
    - Persist profiles keyed by `gpu_id + workload_type`.
