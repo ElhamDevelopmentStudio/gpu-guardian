@@ -9,6 +9,16 @@
 npm/node_modules/
 npm/package-lock.json
 npm/binaries/
+python/.venv/
+python/__pycache__/
+python/*.egg-info/
+python/dist/
+python/build/
+python/.pytest_cache/
+python/src/**/__pycache__/
+python/tests/__pycache__/
+python/**/*.pyc
+python/**/*.pyo
 
 # Go workspace/build artifacts
 /bin/

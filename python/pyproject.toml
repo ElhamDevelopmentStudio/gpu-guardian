@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu-guardian"
+version = "0.1.0"
+description = "Python wrapper for the gpu-guardian daemon and native control binary"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+[project.scripts]
+guardian = "gpu_guardian.cli:main"
+
+[project.urls]
+homepage = "https://github.com/elhamdev/gpu-guardian"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

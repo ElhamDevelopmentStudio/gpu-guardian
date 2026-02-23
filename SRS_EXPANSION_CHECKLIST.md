@@ -191,9 +191,16 @@ The existing codebase already covers a Linux/NVIDIA MVP control loop (`guardian 
    - `npm/package.json` and `npm/README.md`
    - Tests: `npm/test/resolve.test.js`, `npm/test/client.test.js`
 
-2. **[ ] PIP-1 + PIP-2 + PIP-3**
+2. **[x] PIP-1 + PIP-2 + PIP-3**
    - Implement pip package with binary packaging/fetch path.
    - Include CLI entry point and Python API client.
+
+   Implemented in `python/`:
+   - `python/pyproject.toml` (packaging entrypoints + metadata)
+   - `python/src/gpu_guardian/cli.py` (CLI passthrough)
+   - `python/src/gpu_guardian/resolver.py` (env overrides + OS/arch detection + download strategy)
+   - `python/src/gpu_guardian/client.py` (daemon client defaulting to `http://127.0.0.1:8090/v1`)
+   - Tests: `python/tests/test_resolver.py`, `python/tests/test_client.py`
 
 3. **[ ] CLI-1 + DR-3 (ecosystem clients integration policy)**
    - Clients communicate to daemon on localhost by default using same API contract.

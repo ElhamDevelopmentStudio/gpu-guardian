@@ -21,6 +21,7 @@ rule-based control loop to adjust concurrency.
 - Daemon mode (local API)
 - `calibrate` mode for concurrency/thermal/VRAM baseline sweeps
 - `npm/` CLI wrapper package + optional JS client integration
+- `python/` packaging scaffold for `pip` wrapper + Python API client
 - `simulate` mode for deterministic offline replay/what-if policy runs
 - No RL
 - No multi-GPU or multi-OS support
