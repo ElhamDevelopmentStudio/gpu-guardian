@@ -15,10 +15,17 @@ import (
 
 type WorkloadAdapter interface {
 	Start(ctx context.Context, cmd string, concurrency int) error
+	Pause(ctx context.Context) error
+	Resume(ctx context.Context) error
+	UpdateParameters(ctx context.Context, concurrency int) error
+	GetThroughput() uint64
+	GetProgress() float64
 	Restart(ctx context.Context, concurrency int) error
 	Stop() error
 	GetPID() int
 }
+
+const AdapterVersion = "v1"
 
 type Config struct {
 	OutputPath  string
@@ -27,11 +34,12 @@ type Config struct {
 }
 
 type XTTSAdapter struct {
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	command string
-	cancel  context.CancelFunc
-	cfg     Config
+	mu          sync.Mutex
+	cmd         *exec.Cmd
+	command     string
+	cancel      context.CancelFunc
+	concurrency int
+	cfg         Config
 
 	writer      *countingWriter
 	outputFile  *os.File
@@ -62,8 +70,9 @@ func (cw *countingWriter) Reset() {
 
 func NewXttsAdapter(cfg Config) *XTTSAdapter {
 	return &XTTSAdapter{
-		cfg:        cfg,
-		outputPath: cfg.OutputPath,
+		cfg:         cfg,
+		outputPath:  cfg.OutputPath,
+		concurrency: 1,
 	}
 }
 
@@ -97,21 +106,12 @@ func (a *XTTSAdapter) ensureOutputFileLocked() error {
 	return nil
 }
 
-func (a *XTTSAdapter) Start(ctx context.Context, cmd string, concurrency int) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.cmd != nil {
-		return fmt.Errorf("adapter already started")
-	}
+func (a *XTTSAdapter) startLocked(ctx context.Context, cmd string, concurrency int) error {
 	if err := a.ensureOutputFileLocked(); err != nil {
 		return err
 	}
 
-	a.command = cmd
-
 	runCtx, cancel := context.WithCancel(ctx)
-	a.cancel = cancel
 	command := exec.CommandContext(runCtx, "sh", "-lc", cmd)
 	command.Env = withConcurrencyEnv(os.Environ(), concurrency)
 
@@ -123,54 +123,99 @@ func (a *XTTSAdapter) Start(ctx context.Context, cmd string, concurrency int) er
 	command.Stderr = outWriter
 
 	if err := command.Start(); err != nil {
-		if a.cancel != nil {
-			a.cancel()
-			a.cancel = nil
+		if cancel != nil {
+			cancel()
 		}
+		a.cancel = nil
 		return err
 	}
 
+	a.cancel = cancel
 	a.cmd = command
 	a.runningFile = true
 	a.writer.Reset()
+	a.command = cmd
+	a.concurrency = concurrency
 	return nil
+}
+
+func (a *XTTSAdapter) Start(ctx context.Context, cmd string, concurrency int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.cmd != nil {
+		return fmt.Errorf("adapter already started")
+	}
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	return a.startLocked(ctx, cmd, concurrency)
+}
+
+func (a *XTTSAdapter) Pause(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_ = ctx
+	return a.stopLocked()
+}
+
+func (a *XTTSAdapter) Resume(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.cmd != nil {
+		return fmt.Errorf("adapter already running")
+	}
+	if a.command == "" {
+		return fmt.Errorf("no command configured")
+	}
+	if a.concurrency <= 0 {
+		a.concurrency = 1
+	}
+	return a.startLocked(ctx, a.command, a.concurrency)
+}
+
+func (a *XTTSAdapter) UpdateParameters(ctx context.Context, concurrency int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_ = ctx
+	if concurrency <= 0 {
+		return fmt.Errorf("concurrency must be positive")
+	}
+	a.concurrency = concurrency
+	return nil
+}
+
+func (a *XTTSAdapter) GetThroughput() uint64 {
+	return a.OutputBytes()
+}
+
+func (a *XTTSAdapter) GetProgress() float64 {
+	// Progress is workload-specific and cannot be universally inferred from an external process.
+	// This contract is preserved for future adapter-specific implementations.
+	return 0
 }
 
 func (a *XTTSAdapter) Restart(ctx context.Context, concurrency int) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if concurrency <= 0 {
+		concurrency = a.concurrency
+	}
 	if err := a.stopLocked(); err != nil {
 		return err
 	}
-
-	runCtx, cancel := context.WithCancel(ctx)
-	command := exec.CommandContext(runCtx, "sh", "-lc", a.command)
-	command.Env = withConcurrencyEnv(os.Environ(), concurrency)
-
-	var outWriter io.Writer = a.writer
-	if a.cfg.EchoOutput {
-		outWriter = io.MultiWriter(os.Stdout, a.writer)
+	if a.command == "" {
+		return fmt.Errorf("no command configured")
 	}
-	command.Stdout = outWriter
-	command.Stderr = outWriter
-
-	if err := command.Start(); err != nil {
-		a.cancel = nil
-		a.cmd = nil
-		return err
-	}
-
-	a.cancel = cancel
-	a.cmd = command
-	a.writer.Reset()
-	a.runningFile = true
-	return nil
+	return a.startLocked(ctx, a.command, concurrency)
 }
 
 func (a *XTTSAdapter) stopLocked() error {
 	if a.cmd == nil || a.cmd.Process == nil {
 		a.cmd = nil
+		a.cancel = nil
 		return nil
 	}
 	a.writer.Reset()

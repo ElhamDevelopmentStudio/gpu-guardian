@@ -66,3 +66,52 @@ func TestXttsAdapterStartRestartStop(t *testing.T) {
 		t.Fatal("workload output missing expected marker")
 	}
 }
+
+func TestXttsAdapterPauseResumeUpdateParameters(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := Config{
+		OutputPath:  filepath.Join(tmpDir, "workload.log"),
+		StopTimeout: 500 * time.Millisecond,
+		EchoOutput:  false,
+	}
+	adapter := NewXttsAdapter(cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := "sh -lc 'i=0; while true; do echo cycle-$i; i=$((i+1)); sleep 0.1; done'"
+	if err := adapter.Start(ctx, cmd, 2); err != nil {
+		t.Fatalf("failed to start adapter: %v", err)
+	}
+	if !adapter.IsRunning() {
+		t.Fatal("adapter should be running")
+	}
+
+	if err := adapter.Pause(ctx); err != nil {
+		t.Fatalf("failed to pause adapter: %v", err)
+	}
+	if adapter.IsRunning() {
+		t.Fatal("adapter should not be running after pause")
+	}
+
+	if err := adapter.UpdateParameters(ctx, 3); err != nil {
+		t.Fatalf("failed to update parameters: %v", err)
+	}
+
+	if err := adapter.Resume(ctx); err != nil {
+		t.Fatalf("failed to resume adapter: %v", err)
+	}
+	if !adapter.IsRunning() {
+		t.Fatal("adapter should be running after resume")
+	}
+	if adapter.GetProgress() != 0 {
+		t.Fatalf("expected progress fallback value 0, got %f", adapter.GetProgress())
+	}
+	if adapter.GetThroughput() == 0 {
+		t.Log("throughput not yet available")
+	}
+
+	if err := adapter.Stop(); err != nil {
+		t.Fatalf("failed to stop adapter: %v", err)
+	}
+}

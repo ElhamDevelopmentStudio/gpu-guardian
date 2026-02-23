@@ -31,6 +31,11 @@ type EventLogger interface {
 // reuse it and alternate runtimes can be swapped behind it.
 type WorkloadAdapter interface {
 	Start(ctx context.Context, cmd string, concurrency int) error
+	Pause(ctx context.Context) error
+	Resume(ctx context.Context) error
+	UpdateParameters(ctx context.Context, concurrency int) error
+	GetThroughput() uint64
+	GetProgress() float64
 	Restart(ctx context.Context, concurrency int) error
 	Stop() error
 	GetPID() int
