@@ -234,6 +234,10 @@ func (a *XTTSAdapter) stopLocked() error {
 		a.runningFile = false
 		return nil
 	}
+	if a.outputFile != nil {
+		_ = a.outputFile.Close()
+		a.outputFile = nil
+	}
 	a.writer.Reset()
 	if a.cancel != nil {
 		a.cancel()
@@ -257,7 +261,12 @@ func (a *XTTSAdapter) stopLocked() error {
 		// Process terminated.
 	case <-time.After(grace):
 		_ = a.cmd.Process.Signal(syscall.SIGKILL)
-		_ = <-done
+		select {
+		case <-done:
+			// Killed successfully.
+		case <-time.After(grace):
+			// Final best-effort wait to avoid indefinite shutdown hang.
+		}
 	}
 
 	a.cmd = nil
